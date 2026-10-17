@@ -17,7 +17,7 @@ def executor(tmp_path: Path, **settings: object) -> ToolExecutor:
 
 
 async def test_search_uses_duckduckgo_without_key_and_falls_back_on_tavily_503(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import kore_next.agent as agent_module
+    import kore_next.tools.executor as executor_module
 
     original_client = httpx.AsyncClient
     requests: list[str] = []
@@ -28,7 +28,7 @@ async def test_search_uses_duckduckgo_without_key_and_falls_back_on_tavily_503(t
             return httpx.Response(503)
         return httpx.Response(200, text='<a class="result__a" href="https://example.com">Example</a>')
 
-    monkeypatch.setattr(agent_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
     no_key = executor(tmp_path, search_provider="auto", tavily_api_key="")
     result = json.loads(await no_key._web_search("query", 5))
     assert result["provider"] == "duckduckgo"
@@ -42,7 +42,7 @@ async def test_search_uses_duckduckgo_without_key_and_falls_back_on_tavily_503(t
 
 
 async def test_search_filters_before_limit_and_unwraps_redirects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import kore_next.agent as agent_module
+    import kore_next.tools.executor as executor_module
 
     original_client = httpx.AsyncClient
 
@@ -60,7 +60,7 @@ async def test_search_filters_before_limit_and_unwraps_redirects(tmp_path: Path,
             '<a class="result__a" href="https://example.com/second">Second</a>'
         ))
 
-    monkeypatch.setattr(agent_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
     for provider in ("tavily", "duckduckgo"):
         tool = executor(tmp_path, search_provider=provider, tavily_api_key="test-key")
         result = json.loads(await tool._web_search("query", 2))
@@ -70,7 +70,7 @@ async def test_search_filters_before_limit_and_unwraps_redirects(tmp_path: Path,
 
 
 async def test_http_redirect_rechecks_target_before_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import kore_next.agent as agent_module
+    import kore_next.tools.executor as executor_module
 
     original_client = httpx.AsyncClient
     requested: list[str] = []
@@ -80,7 +80,7 @@ async def test_http_redirect_rechecks_target_before_request(tmp_path: Path, monk
         requested.append(str(request.url))
         return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
 
-    monkeypatch.setattr(agent_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
     tool = executor(tmp_path)
 
     async def validate(url: str) -> None:
