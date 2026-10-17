@@ -1,0 +1,14 @@
+.koreagent-next/
+backend/.venv/
+backend/.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/
+native/macos-computer-helper/.build/
+*.log
+logs/
+

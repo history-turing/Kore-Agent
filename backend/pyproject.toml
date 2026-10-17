@@ -1,0 +1,26 @@
+[project]
+name = "koreagent-next"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1", "httpx>=0.27,<1",
+  "aiosqlite>=0.20,<1", "pydantic>=2.9,<3", "python-dotenv>=1.0,<2",
+  "PyYAML>=6.0,<7", "croniter>=3.0,<4",
+]
+
+[project.scripts]
+koreagent-next = "kore_next.cli:main"
+koreagent-next-host = "kore_next.server:main"
+koreagent-swebench = "kore_next.bench.swebench_driver:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
