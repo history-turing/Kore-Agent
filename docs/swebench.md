@@ -120,3 +120,21 @@ docker load -i image.tar
 `astropy__astropy-12907` 已完成一次离线端到端验证：容器使用 `--network none`，联网工具关闭；KoreAgent 在容器内定位并修改 `astropy/modeling/separable.py`，driver 产出 504B patch，官方 harness 判定 `resolved 1/1`。这是一次链路烟测，不代表整体分数。
 
 对应的预测、patch 和评分报告位于 `backend/.koreagent-next/bench/smoke-offline/`。
+
+## 初步样本（非随机，仅供趋势参考）
+
+2026-10-17 用 `deepseek/deepseek-flash` 跑了一组跨仓库的 Verified 样本（每个仓库取第一条，离线、禁用联网工具）：
+
+| instance | 结果 | 步数上限 |
+|---|---|---|
+| astropy__astropy-12907 | resolved | 20 |
+| pytest-dev__pytest-10051 | resolved | 20 |
+| psf__requests-1142 | resolved | 40 |
+| pallets__flask-5014 | resolved | 40 |
+| sympy__sympy-11618 | unresolved | 40 |
+
+汇总：**4/5 resolved（80%）**，总计约 1.0M tokens。报告在 `backend/.koreagent-next/bench/sample-results/eval/`，合并后的预测在 `backend/.koreagent-next/bench/sample-results/predictions.json`。
+
+失败案例：sympy-11618 的 Agent 选择了对不同维度抛 `ValueError`，而题目期望把缺失维度补 0 后计算 `sqrt(5)`。这说明当前 scaffold 能定位到正确代码，但语义判断仍会出错。
+
+这 5 条是“每个仓库的第一条”，存在明显选择偏差，不能外推成 Verified 500 的全量分数。要判断 harness 的真实水平，需要跑随机分层样本（例如 30–100 条）并统一步数预算。

@@ -321,18 +321,28 @@ def prepare_instance(
     workspace: Path,
     container: str,
     network: str,
+    *,
+    reuse: bool = False,
 ) -> None:
-    if workspace.exists() and any(workspace.iterdir()):
-        raise DriverError(f"Workspace is not empty: {workspace}")
-    workspace.mkdir(parents=True, exist_ok=True)
-    seed = f"{container}-seed"
-    _remove_container(docker, seed)
-    _remove_container(docker, container)
-    docker.run(["create", "--name", seed, image])
-    try:
-        docker.run(["cp", f"{seed}:{CONTAINER_REPO}/.", docker.local_path(workspace)], timeout=1800)
-    finally:
+    can_reuse = (
+        reuse
+        and (workspace / ".git" / "HEAD").is_file()
+        and any(item.name != ".git" for item in workspace.iterdir())
+    )
+    if reuse and workspace.exists() and not can_reuse:
+        raise DriverError(f"Cannot reuse an incomplete workspace: {workspace}")
+    if not can_reuse:
+        if workspace.exists() and any(workspace.iterdir()):
+            raise DriverError(f"Workspace is not empty: {workspace}")
+        workspace.mkdir(parents=True, exist_ok=True)
+        seed = f"{container}-seed"
         _remove_container(docker, seed)
+        docker.run(["create", "--name", seed, image])
+        try:
+            docker.run(["cp", f"{seed}:{CONTAINER_REPO}/.", docker.local_path(workspace)], timeout=1800)
+        finally:
+            _remove_container(docker, seed)
+    _remove_container(docker, container)
     mount = f"type=bind,source={docker.local_path(workspace)},target={CONTAINER_REPO}"
     docker.run(
         [
@@ -373,13 +383,15 @@ def checkout_head(docker: DockerCli, container: str) -> str:
     return docker.run(["exec", container, "git", "-C", CONTAINER_REPO, "rev-parse", "HEAD"]).stdout.strip()
 
 
-def checkout_base(docker: DockerCli, container: str, base_commit: str) -> None:
+def checkout_base(docker: DockerCli, container: str, base_commit: str, *, clean: bool = False) -> None:
     probe = docker.run(
         ["exec", container, "git", "-C", CONTAINER_REPO, "cat-file", "-t", base_commit],
         check=False,
     )
     if probe.returncode != 0:
         raise DriverError(f"Image does not contain base commit {base_commit}")
+    if clean:
+        docker.run(["exec", container, "git", "-C", CONTAINER_REPO, "clean", "-fd"])
     docker.run(["exec", container, "git", "-C", CONTAINER_REPO, "checkout", "--force", base_commit])
     docker.run(["exec", container, "git", "-C", CONTAINER_REPO, "reset", "--hard"])
 
@@ -493,7 +505,7 @@ def run_instance(
     instance_id = str(row["instance_id"])
     image = image_for(row, args.image_template)
     container = _container_name(instance_id)
-    workspace = run_dir / "workspaces" / instance_id
+    workspace = Path(args.workspace_dir).expanduser().resolve() if args.workspace_dir else run_dir / "workspaces" / instance_id
     state_dir = run_dir / "state" / instance_id
     events_path = run_dir / "logs" / f"{instance_id}.events.jsonl"
     patch_path = run_dir / "patches" / f"{instance_id}.patch"
@@ -510,11 +522,12 @@ def run_instance(
     started = time.monotonic()
     try:
         ensure_image(docker, image, args.pull)
-        prepare_instance(docker, image, workspace, container, args.container_network)
+        reuse = bool(args.workspace_dir) or args.reuse_workspace
+        prepare_instance(docker, image, workspace, container, args.container_network, reuse=reuse)
         # Official images are built at an environment-setup commit, not always
         # at the issue's base commit; the evaluator resets to base before
         # applying a patch, so the agent must see the same snapshot.
-        checkout_base(docker, container, str(row["base_commit"]))
+        checkout_base(docker, container, str(row["base_commit"]), clean=reuse)
         head = checkout_head(docker, container)
         if head != row["base_commit"]:
             log(f"warning: {instance_id} image HEAD {head[:12]} != base_commit {row['base_commit'][:12]}")
@@ -550,7 +563,7 @@ def run_instance(
     result["duration_seconds"] = round(time.monotonic() - started, 1)
     if not args.keep_containers:
         _remove_container(docker, container)
-    if not args.keep_workspaces:
+    if not args.keep_workspaces and not args.workspace_dir:
         shutil.rmtree(workspace, ignore_errors=True)
     return result
 
@@ -581,6 +594,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--keep-containers", action="store_true")
     parser.add_argument("--keep-workspaces", action="store_true")
+    parser.add_argument(
+        "--workspace-dir",
+        help="Use one existing checkout for every instance (fast image reuse; env must match)",
+    )
+    parser.add_argument(
+        "--reuse-workspace",
+        action="store_true",
+        help="Reuse an existing checkout in the run directory instead of copying from the image",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
