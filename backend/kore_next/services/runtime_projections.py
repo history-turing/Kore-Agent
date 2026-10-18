@@ -79,6 +79,24 @@ def _arguments(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, separators=(",", ":"))
 
 
+def order_tool_messages(messages: list[dict[str, Any]], calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Restore model-request order for the trailing tool-result batch."""
+
+    order = {str(call.get("id")): index for index, call in enumerate(calls)}
+    start = 0
+    for index, message in enumerate(messages):
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            start = index + 1
+    trailing = messages[start:]
+    if not trailing or any(message.get("role") != "tool" for message in trailing):
+        return messages
+    ordered = sorted(
+        trailing,
+        key=lambda message: order.get(str(message.get("tool_call_id")), len(order)),
+    )
+    return [*messages[:start], *ordered]
+
+
 def classify_terminal(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the first durable terminal fact for a run."""
     for event in events:

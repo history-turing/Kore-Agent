@@ -18,6 +18,7 @@ from ..mcp import McpManager, McpToolError
 from ..memory import MemoryService
 from ..model import ModelClient
 from ..model.types import ModelReply
+from ..resources import ResourceAuthority
 from ..rpc import RpcFault
 from ..runtime_policy import RepeatedToolCallGuard, RunBudget, RuntimePolicyError
 from ..tasks import TaskService
@@ -29,6 +30,7 @@ from .conversations import ConversationService
 from .model_settings import ModelSettingsService
 from .run_postprocessing import RunPostProcessor
 from .runs import RunStore
+from .runtime_projections import order_tool_messages
 from .tool_router import ServiceToolRouter
 
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -41,6 +43,36 @@ class StepMetrics:
     tool_tokens: int
     history_tokens: int
     tool_schema_tokens: int
+
+
+@dataclass(frozen=True)
+class ToolCallOutcome:
+    plan_task_id: str | None
+    tool_message: dict[str, Any] | None
+    result_event: dict[str, Any] | None
+
+
+CONCURRENT_READ_TOOLS = {
+    "read_file",
+    "list_files",
+    "get_current_time",
+    "web_search",
+    "history_search",
+    "history_read",
+    "session_search",
+    "memory_list",
+    "memory_read",
+    "task_get",
+    "task_list",
+    "skill_read",
+    "skill_resource_read",
+    "evidence_search",
+    "evidence_read",
+    "tool_result_inspect",
+    "tool_result_read",
+    "automation_list",
+    "automation_get",
+}
 
 
 class RunEngine:
@@ -68,6 +100,7 @@ class RunEngine:
         approvals: ApprovalService,
         artifacts: ArtifactService,
         tool_router: ServiceToolRouter,
+        resources: ResourceAuthority,
         broadcast: Callable[[], Broadcast],
         post_run: Callable[[dict[str, Any], dict[str, Any]], Awaitable[None]],
         track_background: Callable[[asyncio.Task[Any]], None],
@@ -91,6 +124,7 @@ class RunEngine:
         self.approvals = approvals
         self.artifacts = artifacts
         self.tool_router = tool_router
+        self.resources = resources
         self._broadcast = broadcast
         self.post_run = post_run
         self.track_background = track_background
@@ -151,6 +185,7 @@ class RunEngine:
             phase = str((recovery_state or {}).get("phase") or "model_pending")
             pending_tool_calls = list((recovery_state or {}).get("pending_tool_calls") or [])
             tool_cursor = int((recovery_state or {}).get("tool_cursor") or 0)
+            completed_call_ids = (recovery_state or {}).get("completed_call_ids")
             tools = ToolExecutor(
                 settings,
                 self.approvals.request,
@@ -159,6 +194,7 @@ class RunEngine:
                 self._mcp_manager(),
                 self._computer(),
                 self.tool_router,
+                self.resources,
             )
             if recovery_state:
                 activation_steps = recovery_state.get("tool_activation_steps")
@@ -186,23 +222,17 @@ class RunEngine:
             if phase in {"assistant_ready", "tools_running"}:
                 resume_step = start_step
                 projection = tools.project(resume_step, run["mode"])
-                seen_call_ids: set[str] = set()
-                for index in range(tool_cursor, len(pending_tool_calls)):
-                    call = pending_tool_calls[index]
-                    plan_task_id, _ = await self._execute_tool_call(
-                        run,
-                        tools,
-                        call,
-                        resume_step,
-                        model_messages,
-                        plan_task_id,
-                        tool_cursor=index,
-                        pending_tool_calls=pending_tool_calls,
-                        total=total,
-                        model_calls=model_calls,
-                        projection=projection,
-                        seen_call_ids=seen_call_ids,
-                    )
+                calls_to_run = self._pending_calls_to_run(pending_tool_calls, completed_call_ids, tool_cursor)
+                plan_task_id = await self._execute_tool_calls(
+                    run,
+                    tools,
+                    calls_to_run,
+                    resume_step,
+                    model_messages,
+                    plan_task_id,
+                    projection=projection,
+                    order_calls=pending_tool_calls,
+                )
                 snapshot = await self.runs.runtime_event_store.latest(run["id"])
                 await self.checkpoints.save(
                     run_id=run["id"],
@@ -498,22 +528,16 @@ class RunEngine:
                         conn=conn,
                     )
                 await self.runs.broadcast_event(assistant_event)
-                seen_call_ids: set[str] = set()
-                for index, call in enumerate(reply.tool_calls):
-                    plan_task_id, _ = await self._execute_tool_call(
-                        run,
-                        tools,
-                        call,
-                        steps,
-                        model_messages,
-                        plan_task_id,
-                        tool_cursor=index,
-                        pending_tool_calls=reply.tool_calls,
-                        total=total,
-                        model_calls=model_calls,
-                        projection=projection,
-                        seen_call_ids=seen_call_ids,
-                    )
+                plan_task_id = await self._execute_tool_calls(
+                    run,
+                    tools,
+                    reply.tool_calls,
+                    steps,
+                    model_messages,
+                    plan_task_id,
+                    projection=projection,
+                    order_calls=reply.tool_calls,
+                )
                 snapshot = await self.runs.runtime_event_store.latest(run["id"])
                 await self.checkpoints.save(
                     run_id=run["id"],
@@ -695,6 +719,7 @@ class RunEngine:
         model_calls: int,
         pending_tool_calls: list[dict[str, Any]],
         tool_cursor: int,
+        completed_call_ids: list[str] | None = None,
         final: str | None = None,
     ) -> dict[str, Any]:
         state = {
@@ -708,6 +733,7 @@ class RunEngine:
             "model_calls": model_calls,
             "pending_tool_calls": pending_tool_calls,
             "tool_cursor": tool_cursor,
+            "completed_call_ids": completed_call_ids or [],
         }
         if final is not None:
             state["final"] = final
@@ -799,22 +825,92 @@ class RunEngine:
             },
         )
 
+    @staticmethod
+    def _pending_calls_to_run(
+        pending: list[dict[str, Any]],
+        completed: Any,
+        cursor: int,
+    ) -> list[dict[str, Any]]:
+        if isinstance(completed, list):
+            done = {str(item) for item in completed}
+            return [call for call in pending if str(call.get("id")) not in done]
+        return pending[max(0, cursor) :]
+
+    @staticmethod
+    def _is_concurrent_safe(call: dict[str, Any]) -> bool:
+        name = str(call.get("name") or "")
+        if name == "http_request":
+            arguments = call.get("arguments")
+            method = str(arguments.get("method") or "GET").upper() if isinstance(arguments, dict) else "GET"
+            return method in {"GET", "HEAD"}
+        return name in CONCURRENT_READ_TOOLS
+
+    async def _execute_tool_calls(
+        self,
+        run: dict[str, Any],
+        tools: ToolExecutor,
+        calls: list[dict[str, Any]],
+        step: int,
+        model_messages: list[dict[str, Any]],
+        plan_task_id: str | None,
+        *,
+        projection: ToolProjection,
+        order_calls: list[dict[str, Any]] | None = None,
+    ) -> str | None:
+        if not calls:
+            return plan_task_id
+        seen_call_ids: set[str] = set()
+        if len(calls) > 1 and all(self._is_concurrent_safe(call) for call in calls):
+            outcomes: list[ToolCallOutcome | None] = list(
+                await asyncio.gather(
+                    *(
+                        self._execute_tool_call(
+                            run,
+                            tools,
+                            call,
+                            step,
+                            plan_task_id,
+                            projection=projection,
+                            seen_call_ids=seen_call_ids,
+                        )
+                        for call in calls
+                    )
+                )
+            )
+        else:
+            outcomes = [None] * len(calls)
+            for index, call in enumerate(calls):
+                outcomes[index] = await self._execute_tool_call(
+                    run,
+                    tools,
+                    call,
+                    step,
+                    plan_task_id,
+                    projection=projection,
+                    seen_call_ids=seen_call_ids,
+                )
+        for outcome in outcomes:
+            if outcome is None:
+                continue
+            if outcome.plan_task_id is not None:
+                plan_task_id = outcome.plan_task_id
+            if outcome.tool_message is not None:
+                model_messages.append(outcome.tool_message)
+        if order_calls and len(order_calls) > 1:
+            model_messages[:] = order_tool_messages(model_messages, order_calls)
+        return plan_task_id
+
     async def _execute_tool_call(
         self,
         run: dict[str, Any],
         tools: ToolExecutor,
         call: dict[str, Any],
         step: int,
-        model_messages: list[dict[str, Any]],
         plan_task_id: str | None,
         *,
-        tool_cursor: int,
-        pending_tool_calls: list[dict[str, Any]],
-        total: dict[str, int],
-        model_calls: int,
         projection: ToolProjection,
         seen_call_ids: set[str],
-    ) -> tuple[str | None, int]:
+    ) -> ToolCallOutcome:
         await self.runs.event(
             run,
             "tool_call",
@@ -863,7 +959,7 @@ class RunEngine:
                 error, error_code, retryable = str(exc), exc.code, exc.retryable
             else:
                 if execution.get("status") in {"succeeded", "failed"}:
-                    return plan_task_id, tool_cursor + 1
+                    return ToolCallOutcome(plan_task_id, None, None)
                 if execution.get("status") == "unknown":
                     raise RpcFault(
                         -32002,
@@ -931,8 +1027,6 @@ class RunEngine:
             "name": name,
             "tool_call_id": call_id,
         }
-        next_cursor = tool_cursor + 1
-        model_messages.append(tool_message)
         async with self.runs.transaction() as conn:
             if dispatched:
                 await self.runs.finish_tool(
@@ -967,25 +1061,6 @@ class RunEngine:
                 },
                 usage=None,
             )
-            await self.checkpoints.save(
-                run_id=run["id"],
-                conversation_id=run["conversation_id"],
-                sequence=step,
-                state=self._checkpoint_state(
-                    phase="tools_running",
-                    model_messages=model_messages,
-                    total=total,
-                    next_step=step,
-                    plan_task_id=plan_task_id,
-                    tools=tools,
-                    model_calls=model_calls,
-                    pending_tool_calls=pending_tool_calls,
-                    tool_cursor=next_cursor,
-                ),
-                through_event_seq=result_event["event_seq"],
-                digest=result_event["runtime_digest"],
-                conn=conn,
-            )
         await self.runs.broadcast_event(result_event)
         evidence_task = asyncio.create_task(
             self._record_evidence(
@@ -1009,7 +1084,7 @@ class RunEngine:
             )
         )
         self.track_background(evidence_task)
-        return plan_task_id, next_cursor
+        return ToolCallOutcome(plan_task_id, tool_message, result_event)
 
     async def _record_evidence(self, run_id: str, event_seq: int, data: dict[str, Any]) -> None:
         try:

@@ -15,7 +15,7 @@ from ..tools.errors import DuplicateToolCall
 from ..util import dumps, loads, now, uid
 from .conversations import ConversationService
 from .runtime_events import RuntimeEventStore
-from .runtime_projections import project_model_messages
+from .runtime_projections import order_tool_messages, project_model_messages
 
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 ExecuteRun = Callable[[dict[str, Any], dict[str, Any] | None], Awaitable[dict[str, Any]]]
@@ -425,6 +425,12 @@ class RunStore:
                 if execution and execution["status"] in {"succeeded", "failed"}:
                     cursor = max(cursor, index + 1)
             state["tool_cursor"] = cursor
+            state["completed_call_ids"] = [
+                str(call.get("id"))
+                for call in pending
+                if executions.get(str(call.get("id")), {}).get("status") in {"succeeded", "failed"}
+            ]
+            state["model_messages"] = order_tool_messages(state.get("model_messages", []), pending)
         run = await self.create(
             old["conversation_id"],
             old["user_message"],

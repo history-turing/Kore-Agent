@@ -15,6 +15,7 @@ kore_next/
   checkpoint.py           Run 检查点
   context_snapshots.py    上下文压缩物化快照
   context_offload.py      大工具结果的内容寻址归档与有界读取
+  resources.py            跨 Run 的文件租约、串行 Actor 与并发配额
   database.py             SQLite schema、升级与备份
   model/
     client.py             重试策略、凭据与协议分派
@@ -120,6 +121,10 @@ automation tick
 工具可见性按模型步骤记录在 `tool_activation_steps` 中，避免同一批次里 `tool_catalog` 激活后立即调用尚未看到 Schema 的工具。参数在派发前按 JSON Schema 校验；校验失败或人工拒绝都不会写入 `dispatched`，`tool_executions.error_code` 记录稳定错误码。
 
 `tool_catalog` 不带参数时返回能力分组和示例工具，不激活任何 Schema；带 `query`、`category` 或 `names` 时按名称、别名、标签和描述的加权评分返回有界结果。MCP 工具按 `mcp:<server>` 分组，宽泛的类别查询会激活该组内有界数量的工具，具体工具名查询只激活排名靠前的少量工具。
+
+同一 Assistant Step 的多个只读工具会并发派发，结果按模型原始顺序组装回上下文；只要批次中出现写操作、人工审批、MCP 或桌面操作，整批按模型顺序串行执行。`ResourceAuthority` 在 Application 级别共享，用 canonical path 读写租约、Shell 工作区独占锁、桌面串行 Actor、MCP Server 与网络并发配额约束跨 Run 的真实资源竞争。
+
+并发批次只在结束后提交一次完整 checkpoint；批次执行期间，每个调用的 T1/T2 状态和 `tool_result` 事件已经独立落盘。恢复时根据 `tool_executions` 的 `completed_call_ids` 过滤已完成调用，而不是假设调用按索引连续完成；已经投影到上下文的 tool messages 会按模型原始请求顺序重排。
 
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
 

@@ -19,6 +19,7 @@ import httpx
 from ..computer import ComputerClient
 from ..config import Settings
 from ..mcp import McpManager, McpToolError
+from ..resources import ResourceAuthority
 from ..sandbox import SandboxSupervisor
 from .catalog import ToolCatalog
 from .definitions import CORE_TOOLS, PLAN_ALLOWED_TOOLS, builtin_tool_definitions
@@ -118,6 +119,7 @@ class ToolExecutor:
         mcp: McpManager,
         computer: ComputerClient,
         services: Any | None = None,
+        resources: ResourceAuthority | None = None,
     ):
         self.settings = settings
         self.approve = approve
@@ -126,6 +128,7 @@ class ToolExecutor:
         self.mcp = mcp
         self.computer = computer
         self.services = services
+        self.resources = resources or ResourceAuthority()
         self.sandbox = SandboxSupervisor(settings.workspace_dir)
         # Activation is monotonic within a run: name -> first model step where
         # the tool schema becomes visible.
@@ -322,6 +325,10 @@ class ToolExecutor:
         return await prepared.dispatch()
 
     async def dispatch(self, prepared: PreparedToolCall) -> str:
+        async with self.resources.guard(prepared.name, path=prepared.path):
+            return await self._dispatch_unlocked(prepared)
+
+    async def _dispatch_unlocked(self, prepared: PreparedToolCall) -> str:
         name = prepared.name
         arguments = prepared.arguments
         run_id = prepared.run_id

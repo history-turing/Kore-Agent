@@ -19,6 +19,7 @@ from .mcp import McpManager
 from .memory import MemoryService
 from .model import ModelClient
 from .permissions import PermissionRuleStore
+from .resources import ResourceAuthority
 from .rpc import RpcFault, required
 from .runtime_policy import RunBudget, RunBudgetConfig
 from .secrets import SecretStore
@@ -174,6 +175,7 @@ class Application:
             skills=self.skill_service.skills,
             skill_learning=self.skill_learning,
         )
+        self.resources = ResourceAuthority()
         self.run_engine = RunEngine(
             settings=lambda: self.settings,
             model_settings=self.model_settings,
@@ -194,6 +196,7 @@ class Application:
             approvals=self.approvals,
             artifacts=self.artifacts,
             tool_router=self.tool_router,
+            resources=self.resources,
             broadcast=lambda: self.broadcast,
             post_run=lambda run, result: self.run_post_processor.run(run, result),
             track_background=self._track_background,
