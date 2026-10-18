@@ -4,7 +4,7 @@ from kore_next.model.dsml import normalize_reply, parse_dsml_calls
 from kore_next.model.types import ModelReply
 
 DSML = (
-    '<｜｜DSML｜｜ calls>\n'
+    "<｜｜DSML｜｜ calls>\n"
     '<｜｜DSML｜｜ invoke name="shell">\n'
     '<｜｜DSML｜｜ parameter name="command" string="true">cd /testbed && pytest x.py -q</｜｜DSML｜｜ parameter>\n'
     '<｜｜DSML｜｜ parameter name="timeout_seconds" string="true">60</｜｜DSML｜｜ parameter>\n'

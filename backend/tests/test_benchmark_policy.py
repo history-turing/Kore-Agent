@@ -49,4 +49,3 @@ def test_mutating_tool_detection():
     assert is_mutating_tool("write_file", {"path": "x"})
     assert is_mutating_tool("shell", {"command": "sed -i 's/a/b/' x"})
     assert not is_mutating_tool("read_file", {"path": "x"})
-

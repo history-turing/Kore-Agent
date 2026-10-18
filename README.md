@@ -10,6 +10,7 @@ KoreAgent Next 是一套本地 AI Agent Harness，包含 Electron 桌面工作�
 - 敏感操作审批，以及独立的桌面置顶审批窗口
 - 一次性、间隔与 Cron 自动化
 - 文件与 URL 交付物发布、预览和下载
+- 会话级工作区、单次运行目录覆盖，以及纯聊天模式
 - 长期记忆、运行后反思、容量维护、跨会话搜索和持续任务
 - Skill 安装与学习闭环、MCP Server 配置与沙箱策略
 - OpenAI、DeepSeek、Qwen 和 Anthropic 模型配置
@@ -29,6 +30,7 @@ backend/kore_next/
   evidence.py         证据存档与检索
   memory.py           长期记忆
   runtime_policy.py   运行预算与防循环策略
+  workspace.py        可选工作区解析与路径校验
 
 desktop/src/
   App.tsx             应用外壳、导航与命令面板
@@ -91,11 +93,23 @@ Computer Helper 当前仅在 macOS 上可用。Windows 没有可靠工作区沙�
 
 搜索默认使用 DuckDuckGo；设置 `KORENEXT_TAVILY_API_KEY` 后，`KORENEXT_SEARCH_PROVIDER=auto` 会优先使用 Tavily，遇到可恢复错误时回退。HTTP 工具默认拒绝私网地址及重定向到私网的目标，只有明确设置 `KORENEXT_HTTP_ALLOW_PRIVATE_NETWORK=true` 才放行。
 
-默认运行数据位于 `backend/.koreagent-next`，工作文件位于 `backend/workspace`，可通过 `KORENEXT_DATA_DIR` 和 `KORENEXT_WORKSPACE_DIR` 覆盖。数据库升级前会自动生成 `backup-v*` 快照并记录版本。所有配置均使用 `KORENEXT_` 前缀。
+默认运行数据位于 `backend/.koreagent-next`，可通过 `KORENEXT_DATA_DIR` 覆盖。数据库升级前会自动生成 `backup-v*` 快照并记录版本。所有配置均使用 `KORENEXT_` 前缀。
 
 运行日志和辅助索引的保留天数由 `KORENEXT_RUNTIME_RETENTION_DAYS` 控制（默认 30 天），后台清理间隔由 `KORENEXT_MAINTENANCE_INTERVAL_SECONDS` 控制（默认 86400 秒）。`system.maintenance` 默认只返回清理预览；显式传入 `dry_run: false` 才会删除旧的兼容 Trace、证据索引和不再被引用的归档结果。
 
 模型密钥不会进入数据库导出或日志。桌面端保存密钥时使用独立的 KoreAgent Next 密钥命名空间；`.env`、数据库、虚拟环境、依赖与构建目录均被 Git 忽略。
+
+## 工作区
+
+桌面端的工作区在运行时选择，不再依赖进程级固定目录：
+
+- 新建会话默认不绑定工作区，只进行普通对话；文件系统和 MCP 工具不会暴露给模型。
+- 会话可以绑定一个项目目录，后续 Run 默认继承该目录。
+- 发送消息时可以选择“仅本次目录”，本次 Run 使用临时工作区，不改变会话绑定。
+- 每个 Run 会保存实际使用的工作区快照。恢复时优先使用该快照，目录不存在时要求重新选择。
+- 自动化可以绑定独立工作区，并在每次触发时写入 Run 快照。
+
+`KORENEXT_WORKSPACE_DIR` 仅作为 CLI、基准测试和可选默认工作区的兜底值，不会自动绑定到桌面端新会话。工作区中的 `.env`、`secrets.json`、私钥和凭据文件默认拒绝文件工具访问；确需处理时显式设置 `KORENEXT_ALLOW_SENSITIVE_WORKSPACE_FILES=true`，并重新评估目录权限。
 
 ## 验证
 

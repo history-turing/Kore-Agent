@@ -87,7 +87,7 @@ def tool_policy(name: str, arguments: dict | None = None) -> ToolPolicy:
 _BROAD_COMMANDS = (
     (
         re.compile(r"\bgit\s+cat-file\s+--batch-all-objects\b"),
-        "Scanning every git object is too broad. Search source files with `rg -n \"symbol\" path/`.",
+        'Scanning every git object is too broad. Search source files with `rg -n "symbol" path/`.',
     ),
     (
         re.compile(r"(?:^|[;&|]\s*)find\s+/\s"),

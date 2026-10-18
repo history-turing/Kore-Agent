@@ -16,6 +16,7 @@ kore_next/
   context_snapshots.py    上下文压缩物化快照
   context_offload.py      大工具结果的内容寻址归档与有界读取
   resources.py            跨 Run 的文件租约、串行 Actor 与并发配额
+  workspace.py            可选工作区上下文、规范化路径与来源
   database.py             SQLite schema、升级与备份
   model/
     client.py             重试策略、凭据与协议分派
@@ -75,6 +76,7 @@ conversation.send
   -> ConversationService.add_message
   -> RunStore.create
   -> RunEngine.execute
+  -> WorkspaceResolver / Run workspace snapshot
   -> ContextManager.prepare / prepare_step
   -> ModelClient.complete
   -> protocol adapter
@@ -101,6 +103,8 @@ automation tick
 - `ToolProjection` 在每次模型请求前冻结当前可见工具集合；`tool_catalog` 的激活只影响下一个模型步骤。
 - 新代码直接导入 `kore_next.model`、`kore_next.tools` 和 `kore_next.services`，不再保留额外的旧路径兼容层。
 - 前后端共享的是 RPC 方法名和 JSON 字段，不共享 Python 或 TypeScript 对象。
+- 工作区是可空运行上下文：会话绑定提供默认值，单次运行可以覆盖，Run 持久化最终快照。
+- 无工作区时文件系统和 MCP 工具从 ToolProjection 中移除，模型仍可使用对话、记忆、任务、网页和电脑工具。
 
 ## 性能边界
 
@@ -126,6 +130,8 @@ automation tick
 `tool_catalog` 不带参数时返回能力分组和示例工具，不激活任何 Schema；带 `query`、`category` 或 `names` 时按名称、别名、标签和描述的加权评分返回有界结果。MCP 工具按 `mcp:<server>` 分组，宽泛的类别查询会激活该组内有界数量的工具，具体工具名查询只激活排名靠前的少量工具。
 
 同一 Assistant Step 的多个只读工具会并发派发，结果按模型原始顺序组装回上下文；只要批次中出现写操作、人工审批、MCP 或桌面操作，整批按模型顺序串行执行。`ResourceAuthority` 在 Application 级别共享，用 canonical path 读写租约、Shell 工作区独占锁、桌面串行 Actor、MCP Server 与网络并发配额约束跨 Run 的真实资源竞争。
+
+工作区解析顺序为 Run 快照、会话绑定、空工作区；`KORENEXT_WORKSPACE_DIR` 只用于 CLI、基准测试或显式默认目录。`RunEngine` 在开始时解析一次并通过 `WorkspaceContext` 注入 `ToolExecutor`、文件沙箱、Artifact 校验和资源锁。MCP Manager 按规范化工作区缓存，避免不同项目的 MCP 进程共享错误 cwd；运行时缓存有上限，Host 重启时统一关闭并重建。审批参数包含 `workspace_root`，持久授权不会在会话切换目录后错误复用。
 
 并发批次只在结束后提交一次完整 checkpoint；批次执行期间，每个调用的 T1/T2 状态和 `tool_result` 事件已经独立落盘。恢复时根据 `tool_executions` 的 `completed_call_ids` 过滤已完成调用，而不是假设调用按索引连续完成；已经投影到上下文的 tool messages 会按模型原始请求顺序重排。
 
