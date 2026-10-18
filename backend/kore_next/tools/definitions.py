@@ -322,14 +322,24 @@ CORE_TOOLS = {
 
 TOOL_CATALOG_DEFINITION = _definition(
     "tool_catalog",
-    "Find and activate additional tools for this run by capability or name.",
+    "Find and activate additional tools for this run. Call without arguments to list capability groups.",
     {
         "query": {
             "type": "string",
             "description": "Capability to find, for example memory, session search, HTTP, evidence, automation, MCP.",
-        }
+        },
+        "category": {
+            "type": "string",
+            "description": "Restrict results to a capability group, for example memory or mcp:server-name.",
+        },
+        "names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 20,
+            "description": "Explicit tool names to activate.",
+        },
+        "limit": {"type": "integer", "minimum": 1, "maximum": 20},
     },
-    ["query"],
 )
 TOOLS.append(TOOL_CATALOG_DEFINITION)
 

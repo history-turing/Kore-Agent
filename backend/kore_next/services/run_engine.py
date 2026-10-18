@@ -883,6 +883,18 @@ class RunEngine:
             except Exception as exc:
                 output, success, error, error_code = "", False, str(exc), "tool_error"
         output_text = output if isinstance(output, str) else dumps(output)
+        catalog_event: dict[str, Any] | None = None
+        if success and name == "tool_catalog":
+            try:
+                payload = json.loads(output_text)
+                catalog_event = {
+                    "matching_count": payload.get("matching_count", 0),
+                    "activated": payload.get("activated", []),
+                    "match_names": [item.get("name") for item in payload.get("matches", [])[:8]],
+                    "effective_step": payload.get("effective_step"),
+                }
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                catalog_event = None
         output_ref: dict[str, Any] | None = None
         model_output = output_text
         if success and output_text:
@@ -951,6 +963,7 @@ class RunEngine:
                     "retryable": retryable,
                     "dispatched": dispatched,
                     "duration_ms": duration_ms,
+                    "catalog": catalog_event,
                 },
                 usage=None,
             )

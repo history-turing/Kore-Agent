@@ -150,6 +150,13 @@ async def test_activation_and_tool_call_in_one_batch_does_not_execute_second_cal
     assert memory_result["success"] is False
     assert memory_result["error_code"] == "not_visible_yet"
     assert memory_result["dispatched"] is False
+    catalog_result = next(
+        event["tool_result"]
+        for event in events
+        if event["type"] == "tool_result" and event["tool_result"]["tool_call_id"] == "catalog"
+    )
+    assert "memory_list" in catalog_result["catalog"]["activated"]
+    assert catalog_result["catalog"]["effective_step"] == 2
 
 
 async def test_invalid_arguments_are_rejected_before_dispatch(tmp_path):

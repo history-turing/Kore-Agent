@@ -25,6 +25,7 @@ kore_next/
     anthropic_messages.py Anthropic Messages API
   tools/
     definitions.py        工具 schema
+    catalog.py            能力分类、别名与有界检索
     projection.py         每个模型步骤的不可变工具可见性投影
     validation.py         工具参数 JSON Schema 校验
     errors.py             可回传模型的结构化工具错误
@@ -117,6 +118,8 @@ automation tick
 检查点现在同时记录 `through_event_seq` 和前缀 digest。恢复时先校验事件前缀，再只应用水位线之后的模型可见事件；恢复出的新 Run 拥有独立事件序列，继承的是物化状态而不是旧 Run 的序号。检查点与日志不一致时会拒绝自动恢复。
 
 工具可见性按模型步骤记录在 `tool_activation_steps` 中，避免同一批次里 `tool_catalog` 激活后立即调用尚未看到 Schema 的工具。参数在派发前按 JSON Schema 校验；校验失败或人工拒绝都不会写入 `dispatched`，`tool_executions.error_code` 记录稳定错误码。
+
+`tool_catalog` 不带参数时返回能力分组和示例工具，不激活任何 Schema；带 `query`、`category` 或 `names` 时按名称、别名、标签和描述的加权评分返回有界结果。MCP 工具按 `mcp:<server>` 分组，宽泛的类别查询会激活该组内有界数量的工具，具体工具名查询只激活排名靠前的少量工具。
 
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
 

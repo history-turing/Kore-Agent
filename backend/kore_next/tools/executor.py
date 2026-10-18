@@ -20,6 +20,7 @@ from ..computer import ComputerClient
 from ..config import Settings
 from ..mcp import McpManager, McpToolError
 from ..sandbox import SandboxSupervisor
+from .catalog import ToolCatalog
 from .definitions import CORE_TOOLS, PLAN_ALLOWED_TOOLS, builtin_tool_definitions
 from .errors import (
     ToolArgumentError,
@@ -177,25 +178,34 @@ class ToolExecutor:
         mode: str,
         *,
         effective_step: int | None = None,
+        category: str | None = None,
+        names: list[str] | None = None,
+        limit: int = 8,
     ) -> dict[str, Any]:
-        options = self._available_definitions(mode)
-        terms = [term.lower() for term in re.split(r"\s+", query.strip()) if term]
-        matches = []
-        for definition in options:
-            name = definition["function"]["name"]
-            searchable = f"{name} {definition['function'].get('description', '')}".lower()
-            if name != "tool_catalog" and (not terms or any(term in searchable for term in terms)):
-                matches.append(definition)
-        chosen = matches[:8]
+        catalog = ToolCatalog(
+            [
+                definition
+                for definition in self._available_definitions(mode)
+                if definition["function"]["name"] != "tool_catalog"
+            ],
+            active_names=set(self.activation_steps),
+        )
+        result = catalog.search(
+            query=query,
+            category=category,
+            names=names,
+            limit=limit,
+        )
         step = 0 if effective_step is None else max(0, int(effective_step))
-        for definition in chosen:
-            self.activation_steps.setdefault(definition["function"]["name"], step)
-        return {
-            "activated": [definition["function"]["name"] for definition in chosen],
-            "matching_count": len(matches),
-            "effective_step": step,
-            "message": "Activated tools are available on the next model step.",
-        }
+        activated = []
+        for name in result.get("activated", []):
+            if name in self.activation_steps:
+                continue
+            self.activation_steps[name] = step
+            activated.append(name)
+        result["activated"] = activated
+        result["effective_step"] = step
+        return result
 
     def resolve(self, raw: str) -> Path:
         # Container-backed benchmarks address the repository as /testbed. The
@@ -322,6 +332,11 @@ class ToolExecutor:
                     str(arguments.get("query") or ""),
                     mode,
                     effective_step=prepared.effective_step,
+                    category=(str(arguments["category"]) if arguments.get("category") else None),
+                    names=(
+                        [str(item) for item in arguments["names"]] if isinstance(arguments.get("names"), list) else None
+                    ),
+                    limit=int(arguments.get("limit") or 8),
                 ),
                 ensure_ascii=False,
             )
