@@ -57,6 +57,8 @@ export function reduceAgentEvent(previous: LiveRunState | null, event: any): Liv
   if (event.type === 'tool_result') {
     const id = String(event.tool_result?.tool_call_id || event.tool_call_id || '')
     const success = event.tool_result?.success !== false
+    const errorCode = String(event.tool_result?.error_code || '')
+    const detail = String(event.tool_result?.error || event.tool_result?.output || '')
     // Match by call ID: tools with the same name can be active in one run.
     return {
       ...withSeq,
@@ -65,7 +67,7 @@ export function reduceAgentEvent(previous: LiveRunState | null, event: any): Liv
           ? {
               ...item,
               status: success ? 'completed' : 'failed',
-              summary: String(event.tool_result?.error || event.tool_result?.output || '').slice(0, 160),
+              summary: [errorCode, detail].filter(Boolean).join(': ').slice(0, 160),
             }
           : item,
       ),

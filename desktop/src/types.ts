@@ -147,6 +147,17 @@ export interface TraceEvent {
     success?: boolean
     output?: string
     error?: string
+    error_code?: string
+    retryable?: boolean
+    dispatched?: boolean
+    policy?: string
+    idempotency_key?: string
+    catalog?: {
+      matching_count?: number
+      activated?: string[]
+      match_names?: string[]
+      effective_step?: number | null
+    } | null
     duration_ms?: number
   } | null
   message?: { role?: string; content?: string | null; tool_calls?: unknown[] } | null

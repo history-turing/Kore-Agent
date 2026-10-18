@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activityEntries, contextSteps, eventCategory } from './runInsights'
+import { activityEntries, contextSteps, eventCategory, toolErrorLabel } from './runInsights'
 import type { TraceEvent } from './types'
 
 function event(type: string, step: number, extra: Partial<TraceEvent> = {}): TraceEvent {
@@ -83,5 +83,37 @@ describe('run detail presentation', () => {
     expect(entries[1].description).toContain('timeout')
     expect(entries[2].description).toContain('模型调用次数')
     expect(eventCategory(event('auxiliary_model_completed', 2))).toBe('memory')
+  })
+
+  it('labels structured tool errors and recovery policy', () => {
+    const entries = activityEntries([
+      event('tool_result', 1, {
+        tool_result: {
+          tool_call_id: 'call-1',
+          tool_name: 'write_file',
+          success: false,
+          error_code: 'denied',
+          error: 'Denied by user',
+          duration_ms: 10,
+          policy: 'write/reconcile',
+        },
+      }),
+      event('tool_result', 2, {
+        tool_result: {
+          tool_call_id: 'call-2',
+          tool_name: 'memory_list',
+          success: false,
+          error_code: 'not_visible_yet',
+          error: 'Retry on the next step',
+          duration_ms: 2,
+        },
+      }),
+    ])
+    expect(entries[0].title).toContain('已拒绝')
+    expect(entries[0].description).toContain('[denied]')
+    expect(entries[0].description).toContain('write/reconcile')
+    expect(entries[1].title).toContain('下一步可用')
+    expect(entries[1].tone).toBe('warning')
+    expect(toolErrorLabel('invalid_arguments')).toBe('参数无效')
   })
 })

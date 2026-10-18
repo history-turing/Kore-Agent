@@ -59,6 +59,25 @@ describe('live run state', () => {
     expect(recovered.status).toBe('running')
     expect(reduceAgentEvent(recovered, { run_id: 'run', type: 'run_interrupted' }).status).toBe('interrupted')
   })
+
+  it('keeps structured tool error codes in live activity', () => {
+    let state = reduceAgentEvent(null, {
+      run_id: 'run',
+      type: 'tool_call',
+      tool_call: { id: 'call-1', name: 'write_file' },
+    })
+    state = reduceAgentEvent(state, {
+      run_id: 'run',
+      type: 'tool_result',
+      tool_result: {
+        tool_call_id: 'call-1',
+        success: false,
+        error_code: 'denied',
+        error: 'Denied by user',
+      },
+    })
+    expect(state.toolActivity[0].summary).toBe('denied: Denied by user')
+  })
 })
 
 describe('desktop approval queue', () => {

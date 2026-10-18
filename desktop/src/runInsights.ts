@@ -62,6 +62,24 @@ export function eventTitle(event: TraceEvent): string {
   return labels[event.type] || event.type.replaceAll('_', ' ')
 }
 
+const toolErrorLabels: Record<string, string> = {
+  denied: '已拒绝',
+  invalid_arguments: '参数无效',
+  not_visible_yet: '下一步可用',
+  not_active: '工具未激活',
+  duplicate_call_id: '调用 ID 重复',
+  not_allowed: '程序内不允许',
+  timeout: '执行超时',
+  output_too_large: '输出过大',
+  mcp_error: 'MCP 调用失败',
+  tool_error: '执行失败',
+  unknown: '结果未知',
+}
+
+export function toolErrorLabel(code?: string | null): string {
+  return code ? toolErrorLabels[code] || code : '失败'
+}
+
 export function activityEntries(events: TraceEvent[]): ActivityEntry[] {
   const toolNames = new Map<string, string>()
   for (const event of events) {
@@ -95,9 +113,17 @@ export function activityEntries(events: TraceEvent[]): ActivityEntry[] {
         break
       case 'tool_result': {
         const result = event.tool_result
-        title = `${result?.success ? '完成' : '失败'} · ${result?.tool_name || toolNames.get(result?.tool_call_id || '') || '工具'}`
-        description = `耗时 ${formatDuration(result?.duration_ms)}${result?.success ? '' : `；${result?.error || '执行失败'}`}`
-        tone = result?.success ? 'success' : 'danger'
+        const code = result?.error_code
+        const label = toolErrorLabel(code)
+        title = `${result?.success ? '完成' : label} · ${result?.tool_name || toolNames.get(result?.tool_call_id || '') || '工具'}`
+        description = `耗时 ${formatDuration(result?.duration_ms)}${
+          result?.success ? '' : `；${result?.error || label}${code ? ` [${code}]` : ''}`
+        }${result?.policy ? `；策略 ${result.policy}` : ''}`
+        tone = result?.success
+          ? 'success'
+          : ['denied', 'invalid_arguments', 'not_visible_yet', 'not_active'].includes(code || '')
+            ? 'warning'
+            : 'danger'
         break
       }
       case 'approval_requested':
