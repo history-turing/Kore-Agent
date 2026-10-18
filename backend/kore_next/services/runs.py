@@ -38,6 +38,8 @@ RUN_FIELDS = (
     "scheduled_for",
     "triggered_at",
     "mode",
+    "workspace_path",
+    "workspace_source",
 )
 
 
@@ -46,8 +48,9 @@ class SqlExecutor(Protocol):
 
 
 async def insert_run(db: SqlExecutor, run: dict[str, Any], conn: Any | None = None) -> None:
+    columns = ",".join(RUN_FIELDS)
     placeholders = ",".join("?" for _ in RUN_FIELDS)
-    sql = f"INSERT INTO runs VALUES({placeholders})"
+    sql = f"INSERT INTO runs({columns}) VALUES({placeholders})"
     args = tuple(run[field] for field in RUN_FIELDS)
     if conn is None:
         await db.execute(sql, args)
@@ -105,6 +108,8 @@ class RunStore:
             "triggered_at": extra.get("triggered_at"),
             "turn_id": extra.get("turn_id") or rid,
             "mode": mode,
+            "workspace_path": extra.get("workspace_path"),
+            "workspace_source": extra.get("workspace_source") or "none",
         }
         await insert_run(self.db, run, conn)
         return run

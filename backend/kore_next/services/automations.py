@@ -249,6 +249,8 @@ class AutomationService:
                 "scheduled_for": scheduled_for,
                 "triggered_at": stamp,
                 "mode": "normal",
+                "workspace_path": None,
+                "workspace_source": "none",
             }
             await insert_run(db, run)
             await self.runs.runtime_event_store.append(

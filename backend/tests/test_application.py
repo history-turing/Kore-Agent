@@ -123,6 +123,45 @@ async def test_session_search_finds_other_conversations_and_tracks_deletion(app)
     assert (await app.conversation_search({"query": "星球"}))["matches"] == []
 
 
+async def test_conversation_workspace_binding_is_optional_and_persisted(app, tmp_path):
+    plain = (await app.conversation_create({}))["conversation"]
+    assert plain["workspace_path"] is None
+
+    project = tmp_path / "project"
+    project.mkdir()
+    bound = (await app.conversation_create({"workspace_path": str(project)}))["conversation"]
+    assert bound["workspace_path"] == str(project.resolve())
+    assert (await app.conversation_get({"conversation_id": bound["id"]}))["conversation"]["workspace_path"] == str(
+        project.resolve()
+    )
+
+    updated = (
+        await app.conversations.set_workspace(
+            {
+                "conversation_id": bound["id"],
+                "workspace_path": None,
+            }
+        )
+    )["conversation"]
+    assert updated["workspace_path"] is None
+
+
+async def test_run_records_effective_workspace_snapshot(app, tmp_path):
+    conversation = (await app.conversation_create({}))["conversation"]
+    project = tmp_path / "project"
+    project.mkdir()
+    run = await app.runs.create(
+        conversation["id"],
+        "inspect",
+        "normal",
+        workspace_path=str(project.resolve()),
+        workspace_source="run_override",
+    )
+    stored = (await app.runs.get({"run_id": run["id"]}))["run"]
+    assert stored["workspace_path"] == str(project.resolve())
+    assert stored["workspace_source"] == "run_override"
+
+
 async def test_model_requests_are_durable_and_tool_activation_survives_checkpoint(app, monkeypatch):
     conversation = (await app.conversation_create({}))["conversation"]
     await app.conversations.add_message(conversation["id"], {"role": "user", "content": "Find memory tools"})

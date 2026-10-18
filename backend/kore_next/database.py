@@ -14,7 +14,8 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS conversations(
- id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ workspace_path TEXT
 );
 CREATE TABLE IF NOT EXISTS messages(
  id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS runs(
  id TEXT PRIMARY KEY, conversation_id TEXT, status TEXT NOT NULL, user_message TEXT NOT NULL,
  created_at TEXT NOT NULL, started_at TEXT, updated_at TEXT NOT NULL, completed_at TEXT,
  error TEXT, stop_reason TEXT, recovered_from_run_id TEXT, source TEXT, source_id TEXT,
- scheduled_for TEXT, triggered_at TEXT, mode TEXT NOT NULL DEFAULT 'normal'
+ scheduled_for TEXT, triggered_at TEXT, mode TEXT NOT NULL DEFAULT 'normal',
+ workspace_path TEXT, workspace_source TEXT NOT NULL DEFAULT 'none'
 );
 CREATE TABLE IF NOT EXISTS events(
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL,
@@ -117,7 +119,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class Database:
@@ -171,6 +173,17 @@ class Database:
                     await db.execute("ALTER TABLE tool_executions ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1")
                 if "idempotency_key" not in names:
                     await db.execute("ALTER TABLE tool_executions ADD COLUMN idempotency_key TEXT")
+            if version < 10:
+                columns = await db.execute("PRAGMA table_info(conversations)")
+                names = {row["name"] for row in await columns.fetchall()}
+                if "workspace_path" not in names:
+                    await db.execute("ALTER TABLE conversations ADD COLUMN workspace_path TEXT")
+                columns = await db.execute("PRAGMA table_info(runs)")
+                names = {row["name"] for row in await columns.fetchall()}
+                if "workspace_path" not in names:
+                    await db.execute("ALTER TABLE runs ADD COLUMN workspace_path TEXT")
+                if "workspace_source" not in names:
+                    await db.execute("ALTER TABLE runs ADD COLUMN workspace_source TEXT NOT NULL DEFAULT 'none'")
             if version < 2:
                 await db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
             await db.execute(

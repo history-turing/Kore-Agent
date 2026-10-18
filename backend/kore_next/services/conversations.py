@@ -5,6 +5,7 @@ from typing import Any
 from ..database import Database
 from ..rpc import RpcFault, required
 from ..util import dumps, loads, now, uid
+from ..workspace import resolve_workspace
 
 
 class ConversationService:
@@ -20,6 +21,7 @@ class ConversationService:
             "title": row["title"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "workspace_path": row["workspace_path"],
             "message_count": count,
         }
 
@@ -35,11 +37,23 @@ class ConversationService:
     async def create(self, params: dict[str, Any]) -> dict[str, Any]:
         stamp, cid = now(), uid()
         title = str(params.get("title") or "新对话").strip()[:120]
+        workspace = resolve_workspace(params.get("workspace_path"))
         await self.db.execute(
-            "INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?,?,?,?)",
-            (cid, title, stamp, stamp),
+            "INSERT INTO conversations(id,title,created_at,updated_at,workspace_path) VALUES(?,?,?,?,?)",
+            (cid, title, stamp, stamp, workspace.path),
         )
         row = await self.db.fetchone("SELECT * FROM conversations WHERE id=?", (cid,))
+        return {"conversation": self._conversation(row)}
+
+    async def set_workspace(self, params: dict[str, Any]) -> dict[str, Any]:
+        cid = str(required(params, "conversation_id"))
+        await self.require(cid)
+        workspace = resolve_workspace(params.get("workspace_path"))
+        await self.db.execute(
+            "UPDATE conversations SET workspace_path=?,updated_at=? WHERE id=?",
+            (workspace.path, now(), cid),
+        )
+        row = await self.require(cid)
         return {"conversation": self._conversation(row)}
 
     async def get(self, params: dict[str, Any]) -> dict[str, Any]:

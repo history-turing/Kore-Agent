@@ -3,6 +3,7 @@ export interface Conversation {
   title: string
   created_at: string
   updated_at: string
+  workspace_path: string | null
   message_count: number
 }
 export interface Message {
@@ -25,6 +26,8 @@ export interface Run {
   mode: 'normal' | 'plan'
   source?: string | null
   recovered_from_run_id?: string | null
+  workspace_path?: string | null
+  workspace_source?: string | null
 }
 export interface Approval {
   id: string

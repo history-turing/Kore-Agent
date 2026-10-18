@@ -98,7 +98,7 @@ async def test_existing_messages_are_indexed_during_database_upgrade(tmp_path: P
             "CREATE TABLE messages(id INTEGER PRIMARY KEY,conversation_id TEXT,role TEXT,content TEXT,"
             "name TEXT,tool_call_id TEXT,tool_calls_json TEXT,reasoning TEXT,created_at TEXT)"
         )
-        connection.execute("INSERT INTO conversations VALUES('old','Old','now','now')")
+        connection.execute("INSERT INTO conversations(id,title,created_at,updated_at) VALUES('old','Old','now','now')")
         connection.execute("INSERT INTO messages VALUES(1,'old','user','历史星球记录',NULL,NULL,'[]',NULL,'now')")
         connection.execute("PRAGMA user_version=1")
     upgraded = Database(path)
@@ -108,7 +108,9 @@ async def test_existing_messages_are_indexed_during_database_upgrade(tmp_path: P
 
 
 async def test_fts_skips_tool_result_payloads(database: Database):
-    await database.execute("INSERT INTO conversations VALUES('c','Conversation','now','now')")
+    await database.execute(
+        "INSERT INTO conversations(id,title,created_at,updated_at) VALUES('c','Conversation','now','now')"
+    )
     await database.execute(
         "INSERT INTO messages(conversation_id,role,content,created_at) VALUES('c','user','needle user','now')"
     )
@@ -187,7 +189,9 @@ async def test_memory_maintenance_only_archives_model_selected_candidates(databa
 async def test_skill_learning_never_auto_promotes(database: Database):
     stamp = now()
     await database.execute(
-        "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,conversation_id,status,user_message,created_at,started_at,updated_at,"
+        "completed_at,error,stop_reason,recovered_from_run_id,source,source_id,scheduled_for,triggered_at,mode) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "run1",
             None,
@@ -230,7 +234,9 @@ async def test_skill_learning_never_auto_promotes(database: Database):
     assert first["status"] == "observing"
     assert second is None
     await database.execute(
-        "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,conversation_id,status,user_message,created_at,started_at,updated_at,"
+        "completed_at,error,stop_reason,recovered_from_run_id,source,source_id,scheduled_for,triggered_at,mode) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "run2",
             None,
@@ -407,7 +413,9 @@ async def test_permission_rules_match_empty_arguments_and_scope_priority(databas
 async def test_evidence_keeps_raw_output_and_filters_before_limit(database: Database):
     stamp = now()
     await database.execute(
-        "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,conversation_id,status,user_message,created_at,started_at,updated_at,"
+        "completed_at,error,stop_reason,recovered_from_run_id,source,source_id,scheduled_for,triggered_at,mode) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "run-evidence",
             "conversation-evidence",
@@ -452,7 +460,9 @@ async def test_evidence_keeps_raw_output_and_filters_before_limit(database: Data
 async def test_evidence_backfills_from_runtime_event_log(database: Database):
     stamp = now()
     await database.execute(
-        "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,conversation_id,status,user_message,created_at,started_at,updated_at,"
+        "completed_at,error,stop_reason,recovered_from_run_id,source,source_id,scheduled_for,triggered_at,mode) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "run-evidence-log",
             "conversation-evidence-log",

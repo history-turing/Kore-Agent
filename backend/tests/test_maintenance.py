@@ -13,7 +13,9 @@ async def test_retention_prunes_derived_records_and_keeps_runtime_events(tmp_pat
     await db.initialize()
     old = (datetime.now(UTC) - timedelta(days=60)).isoformat().replace("+00:00", "Z")
     await db.execute(
-        "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,conversation_id,status,user_message,created_at,started_at,updated_at,"
+        "completed_at,error,stop_reason,recovered_from_run_id,source,source_id,scheduled_for,triggered_at,mode) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "run-old",
             "conversation-old",
