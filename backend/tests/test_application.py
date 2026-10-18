@@ -11,6 +11,7 @@ from kore_next.config import Settings
 from kore_next.model import ModelReply
 from kore_next.services.run_engine import RunEngine
 from kore_next.util import dumps, now
+from kore_next.workspace import resolve_workspace
 
 
 @pytest.fixture
@@ -193,6 +194,22 @@ async def test_automation_workspace_is_persisted_and_snapshotted(app, tmp_path):
     assert run is not None
     assert run["workspace_path"] == str(project.resolve())
     assert run["workspace_source"] == "automation"
+
+
+async def test_mcp_managers_are_cached_per_workspace(app, tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    first_workspace = resolve_workspace(first)
+    second_workspace = resolve_workspace(second)
+
+    first_manager = await app._mcp_manager_for_workspace(first_workspace)
+    assert await app._mcp_manager_for_workspace(first_workspace) is first_manager
+    second_manager = await app._mcp_manager_for_workspace(second_workspace)
+    assert second_manager is not first_manager
+    default_manager = await app._mcp_manager_for_workspace(resolve_workspace(app.settings.workspace_dir))
+    assert default_manager is app.mcp_manager
 
 
 async def test_run_records_effective_workspace_snapshot(app, tmp_path):

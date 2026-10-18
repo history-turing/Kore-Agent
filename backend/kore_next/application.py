@@ -38,7 +38,7 @@ from .services.skills import SkillService
 from .services.tool_router import ServiceToolRouter
 from .skill_learning import SkillLearningService
 from .tasks import TaskService
-from .workspace import WorkspaceError, resolve_workspace
+from .workspace import WorkspaceContext, WorkspaceError, resolve_workspace
 
 Broadcaster = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -62,6 +62,8 @@ class Application:
         self.db = Database(self.settings.database)
         self.secrets = SecretStore(self.settings.data_dir / "settings")
         self.mcp_manager = McpManager(self.settings.workspace_dir)
+        self.workspace_mcp_managers: dict[str, McpManager] = {}
+        self.workspace_mcp_lock = asyncio.Lock()
         self.computer = ComputerClient(self.settings, self._store_observation)
         self.context_manager = ContextManager(self.db)
         self.context_offload = ContextOffloadStore(self.db, self.settings.data_dir / "context-offload")
@@ -194,7 +196,7 @@ class Application:
             run_budget=self.run_budget,
             computer_guard=self.computer_guard,
             computer=lambda: self.computer,
-            mcp_manager=lambda: self.mcp_manager,
+            mcp_manager=self._mcp_manager_for_workspace,
             approvals=self.approvals,
             artifacts=self.artifacts,
             tool_router=self.tool_router,
@@ -206,6 +208,26 @@ class Application:
 
     async def _noop(self, method: str, params: dict[str, Any]) -> None:
         return None
+
+    async def _mcp_manager_for_workspace(self, workspace: WorkspaceContext | None) -> McpManager:
+        if workspace is None or workspace.root is None:
+            return self.mcp_manager
+        key = os.path.normcase(str(workspace.root))
+        default_key = os.path.normcase(str(self.settings.workspace_dir.resolve()))
+        if key == default_key:
+            return self.mcp_manager
+        async with self.workspace_mcp_lock:
+            if key in self.workspace_mcp_managers:
+                return self.workspace_mcp_managers[key]
+            manager = McpManager(workspace.root)
+            mcp = await self.mcp_settings.mcp()
+            await manager.start(mcp["servers"])
+            self.workspace_mcp_managers[key] = manager
+            while len(self.workspace_mcp_managers) > 8:
+                oldest_key = next(iter(self.workspace_mcp_managers))
+                oldest = self.workspace_mcp_managers.pop(oldest_key)
+                await oldest.close()
+            return manager
 
     async def start(self) -> None:
         await self.db.initialize()
@@ -243,6 +265,11 @@ class Application:
             return_exceptions=True,
         )
         await self.mcp_manager.close()
+        await asyncio.gather(
+            *(manager.close() for manager in self.workspace_mcp_managers.values()),
+            return_exceptions=True,
+        )
+        self.workspace_mcp_managers.clear()
         await self.computer.close()
 
     def methods(self) -> dict[str, Callable[[dict[str, Any]], Awaitable[Any]]]:
@@ -338,6 +365,11 @@ class Application:
         if active:
             raise RpcFault(-32001, "Host restart is blocked by active runs", {"run_ids": active})
         await self.mcp_manager.close()
+        await asyncio.gather(
+            *(manager.close() for manager in self.workspace_mcp_managers.values()),
+            return_exceptions=True,
+        )
+        self.workspace_mcp_managers.clear()
         await self.computer.close()
         self.mcp_manager = McpManager(self.settings.workspace_dir)
         mcp = await self.mcp_settings.mcp()

@@ -12,6 +12,7 @@ from kore_next.model.tool_arguments import parse_tool_arguments
 from kore_next.model.types import ModelReply
 from kore_next.tools import (
     ToolArgumentError,
+    ToolError,
     ToolExecutor,
     ToolNotVisibleYet,
 )
@@ -103,6 +104,50 @@ async def test_tool_activation_is_visible_only_on_the_next_model_step(tmp_path):
             effective_step=2,
         )
     assert raised.value.effective_step == 2
+
+
+async def test_sensitive_workspace_files_require_explicit_opt_in(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text("SECRET=1", encoding="utf-8")
+    executor = _executor(tmp_path)
+    with pytest.raises(ToolError) as error:
+        await executor.execute("run", "read_file", {"path": ".env"}, "sensitive")
+    assert error.value.code == "sensitive_file"
+
+    relaxed = ToolExecutor(
+        Settings(
+            data_dir=tmp_path / "data",
+            workspace_dir=workspace,
+            allow_sensitive_workspace_files=True,
+        ),
+        _allow,
+        None,
+        None,
+        McpManager(tmp_path),
+        NoComputer(),  # type: ignore[arg-type]
+    )
+    assert await relaxed.execute("run", "read_file", {"path": ".env"}, "sensitive-allowed") == "SECRET=1"
+
+
+async def test_approval_arguments_include_workspace_root(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    seen: dict[str, object] = {}
+
+    async def deny(_run_id, _call_id, arguments, _reason):
+        seen.update(arguments)
+        return False
+
+    executor = _executor(tmp_path, approve=deny)
+    with pytest.raises(ToolError):
+        await executor.execute(
+            "run",
+            "write_file",
+            {"path": "approved.txt", "content": "x"},
+            "approval-root",
+        )
+    assert seen["workspace_root"] == str(workspace.resolve())
 
 
 async def test_activation_and_tool_call_in_one_batch_does_not_execute_second_call(tool_app, monkeypatch):

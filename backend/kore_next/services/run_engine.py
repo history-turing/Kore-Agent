@@ -75,7 +75,7 @@ class RunEngine:
         run_budget: RunBudget,
         computer_guard: ComputerStagnationGuard,
         computer: Callable[[], ComputerClient],
-        mcp_manager: Callable[[], McpManager],
+        mcp_manager: Callable[[WorkspaceContext | None], Awaitable[McpManager]],
         approvals: ApprovalService,
         artifacts: ArtifactService,
         tool_router: ServiceToolRouter,
@@ -181,12 +181,13 @@ class RunEngine:
             pending_tool_calls = list((recovery_state or {}).get("pending_tool_calls") or [])
             tool_cursor = int((recovery_state or {}).get("tool_cursor") or 0)
             completed_call_ids = (recovery_state or {}).get("completed_call_ids")
+            mcp_manager = await self._mcp_manager(workspace)
             tools = ToolExecutor(
                 settings,
                 self.approvals.request,
                 self.artifacts.publish,
                 self.memory.create,
-                self._mcp_manager(),
+                mcp_manager,
                 self._computer(),
                 self.tool_router,
                 self.resources,

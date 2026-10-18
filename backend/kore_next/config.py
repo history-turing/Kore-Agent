@@ -30,6 +30,9 @@ class Settings:
     user_skills_dir: Path = _path("KORENEXT_USER_SKILLS_DIR", Path.home() / ".koreagent-next" / "skills")
     workspace_dir: Path = _path("KORENEXT_WORKSPACE_DIR", ROOT / "workspace")
     computer_enabled: bool = os.getenv("KORENEXT_COMPUTER_ENABLED", "false").lower() == "true"
+    allow_sensitive_workspace_files: bool = (
+        os.getenv("KORENEXT_ALLOW_SENSITIVE_WORKSPACE_FILES", "false").lower() == "true"
+    )
     # Shell execution defaults to the workspace sandbox. Benchmarks that run the
     # host inside a disposable container can opt into running commands through
     # `docker exec`, where the container itself is the isolation boundary.

@@ -91,6 +91,15 @@ WORKSPACE_TOOLS = {
     "write_file",
 }
 
+SENSITIVE_WORKSPACE_FILES = {
+    ".git-credentials",
+    ".netrc",
+    "credentials.json",
+    "id_ed25519",
+    "id_rsa",
+    "secrets.json",
+}
+
 
 def _search_result_url(raw: str) -> str | None:
     """Return an HTTP result URL, unwrapping DuckDuckGo's redirect links."""
@@ -249,6 +258,23 @@ class ToolExecutor:
             value = value[len("/testbed/") :]
         return self.sandbox.resolve(value)
 
+    def _check_sensitive_path(self, path: Path) -> None:
+        if self.settings.allow_sensitive_workspace_files or self.workspace.root is None:
+            return
+        relative = path.relative_to(self.workspace.root)
+        name = relative.name.lower()
+        if (
+            name == ".env"
+            or name.startswith(".env.")
+            or name in SENSITIVE_WORKSPACE_FILES
+            or name.endswith((".key", ".pem"))
+            or relative.as_posix() == ".git/config"
+        ):
+            raise ToolForbidden(
+                "Sensitive workspace files require explicit opt-in",
+                code="sensitive_file",
+            )
+
     async def preflight(
         self,
         run_id: str,
@@ -286,6 +312,7 @@ class ToolExecutor:
             if not self.workspace.available:
                 raise WorkspaceRequired(f"Tool {name} requires a workspace")
             path = self.resolve(str(arguments.get("path", "")))
+            self._check_sensitive_path(path)
         elif name == "list_files":
             if not self.workspace.available:
                 raise WorkspaceRequired("Tool list_files requires a workspace")
@@ -298,11 +325,15 @@ class ToolExecutor:
                 if not self.workspace.available:
                     raise WorkspaceRequired("Publishing a workspace file requires a workspace")
                 path = self.resolve(str(path_value))
+                self._check_sensitive_path(path)
             else:
                 await self._validate_public_url(str(url_value))
         reason = self._approval_reason(name, arguments)
         if reason is not None:
-            allowed = await self.approve(run_id, call_id, {**arguments, "tool_name": name}, reason)
+            approval_arguments = {**arguments, "tool_name": name}
+            if self.workspace.root is not None:
+                approval_arguments["workspace_root"] = str(self.workspace.root)
+            allowed = await self.approve(run_id, call_id, approval_arguments, reason)
             if not allowed:
                 raise ToolDenied("Denied by user")
         return PreparedToolCall(
