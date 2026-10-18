@@ -460,7 +460,7 @@ def _event_summary(path: Path) -> dict[str, Any]:
             final_message = str((event.get("message") or {}).get("content") or "")
         usage = event.get("usage")
         if isinstance(usage, dict) and usage.get("total_tokens"):
-            tokens = int(usage["total_tokens"])
+            tokens = max(tokens, int(usage["total_tokens"]))
     return {
         "model_calls": model_calls,
         "tool_calls": tool_calls,
@@ -661,6 +661,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--provider")
     parser.add_argument("--base-url")
     parser.add_argument("--max-steps", type=int, default=40)
+    parser.add_argument("--warning-tokens", type=int, default=180_000)
+    parser.add_argument("--finalization-tokens", type=int, default=240_000)
+    parser.add_argument("--hard-tokens", type=int, default=300_000)
     parser.add_argument("--shell-timeout-cap", type=float, default=120)
     parser.add_argument("--shell-output-limit", type=int, default=12000)
     parser.add_argument("--timeout", type=float, default=1800, help="Per-instance agent timeout in seconds")
@@ -719,6 +722,8 @@ def main(argv: list[str] | None = None) -> None:
             "Save one in KoreAgent settings or set KORENEXT_<PROVIDER>_API_KEY."
         )
     steps = max(args.max_steps, 4)
+    if not (0 < args.warning_tokens < args.finalization_tokens < args.hard_tokens):
+        raise SystemExit("Token budgets must satisfy warning < finalization < hard")
     warning_calls = max(2, int(steps * 0.5))
     finalization_calls = max(warning_calls + 1, int(steps * 0.9))
     hard_calls = max(finalization_calls + 1, steps)
@@ -732,9 +737,9 @@ def main(argv: list[str] | None = None) -> None:
         run_warning_model_calls=warning_calls,
         run_finalization_model_calls=finalization_calls,
         run_hard_model_calls=hard_calls,
-        run_warning_tokens=180_000,
-        run_finalization_tokens=240_000,
-        run_hard_tokens=300_000,
+        run_warning_tokens=args.warning_tokens,
+        run_finalization_tokens=args.finalization_tokens,
+        run_hard_tokens=args.hard_tokens,
     )
     run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else settings.data_dir / "bench" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
