@@ -489,6 +489,15 @@ export default function RunExplorer({
       runs.refetch()
     },
   })
+  const resolveTool = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'retry' | 'abandon' }) =>
+      rpc.call<{ run?: Run }>('run.resolve_tool', { run_id: id, action }),
+    onSuccess: (result) => {
+      if (result.run?.id) setSelected(result.run.id)
+      runs.refetch()
+      trace.refetch()
+    },
+  })
   const current = trace.data
   const run = runs.data?.find((item) => item.id === selected)
   return (
@@ -591,11 +600,29 @@ export default function RunExplorer({
                         中断
                       </button>
                     )}
-                    {['failed', 'cancelled', 'interrupted'].includes(current.trace.status) && (
-                      <button disabled={recover.isPending} onClick={() => recover.mutate(selected)}>
-                        <RotateCcw size={14} />
-                        恢复运行
-                      </button>
+                    {current.trace.stop_reason === 'tool_unknown' ? (
+                      <>
+                        <button
+                          disabled={resolveTool.isPending}
+                          onClick={() => resolveTool.mutate({ id: selected, action: 'retry' })}
+                        >
+                          <RotateCcw size={14} />
+                          确认重试工具
+                        </button>
+                        <button
+                          disabled={resolveTool.isPending}
+                          onClick={() => resolveTool.mutate({ id: selected, action: 'abandon' })}
+                        >
+                          放弃并修复历史
+                        </button>
+                      </>
+                    ) : (
+                      ['failed', 'cancelled', 'interrupted'].includes(current.trace.status) && (
+                        <button disabled={recover.isPending} onClick={() => recover.mutate(selected)}>
+                          <RotateCcw size={14} />
+                          恢复运行
+                        </button>
+                      )
                     )}
                   </div>
                 </div>
@@ -605,9 +632,9 @@ export default function RunExplorer({
                     {run?.error && <p>{run.error}</p>}
                   </div>
                 )}
-                {(interrupt.error || recover.error) && (
+                {(interrupt.error || recover.error || resolveTool.error) && (
                   <div className="run-query-error" role="alert">
-                    {String(interrupt.error || recover.error)}
+                    {String(interrupt.error || recover.error || resolveTool.error)}
                   </div>
                 )}
                 <nav className="run-section-nav" aria-label="运行详情章节">

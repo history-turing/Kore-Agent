@@ -175,6 +175,8 @@ class RunEngine:
                 )
             if phase == "blocked":
                 raise RpcFault(-32001, "Run stopped by runtime policy and cannot be resumed")
+            if phase == "abandoned":
+                raise RpcFault(-32001, "Run was abandoned after an unknown tool outcome")
             if phase in {"assistant_ready", "tools_running"}:
                 resume_step = start_step
                 for index in range(tool_cursor, len(pending_tool_calls)):
@@ -908,23 +910,39 @@ class RunEngine:
                 conn=conn,
             )
         await self.runs.broadcast_event(result_event)
-        await self.evidence.record(
-            run["id"],
-            "tool_result",
-            {
-                "tool_call_id": call["id"],
-                "tool_name": call["name"],
-                "arguments": call["arguments"],
-                "success": success,
-                "output": model_output,
-                "output_ref": output_ref,
-                "error": error,
-                "duration_ms": duration_ms,
-                "task_id": plan_task_id,
-                "task_step": step,
-            },
+        evidence_task = asyncio.create_task(
+            self._record_evidence(
+                run["id"],
+                result_event["event_seq"],
+                {
+                    "tool_call_id": call["id"],
+                    "tool_name": call["name"],
+                    "arguments": call["arguments"],
+                    "success": success,
+                    "output": model_output,
+                    "output_ref": output_ref,
+                    "error": error,
+                    "duration_ms": duration_ms,
+                    "task_id": plan_task_id,
+                    "task_step": step,
+                },
+            )
         )
+        self.track_background(evidence_task)
         return plan_task_id, next_cursor
+
+    async def _record_evidence(self, run_id: str, event_seq: int, data: dict[str, Any]) -> None:
+        try:
+            await self.evidence.record(
+                run_id,
+                "tool_result",
+                data,
+                evidence_id=f"ev:{run_id}:{event_seq}",
+            )
+        except Exception:
+            # The runtime event remains the source of truth; startup backfill
+            # will retry this derived index if the process exits early.
+            return
 
     @staticmethod
     def history_for_model(history: list[dict[str, Any]]) -> list[dict[str, Any]]:

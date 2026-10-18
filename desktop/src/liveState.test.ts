@@ -32,6 +32,33 @@ describe('live run state', () => {
     const second = reduceAgentEvent(first, { run_id: 'two', type: 'assistant_delta', delta: 'new' })
     expect(second).toMatchObject({ runId: 'two', content: 'new' })
   })
+
+  it('replays durable assistant messages without duplicating streamed text', () => {
+    let state = reduceAgentEvent(null, {
+      run_id: 'run',
+      type: 'assistant_delta',
+      delta: '旧',
+      event_seq: 1,
+    })
+    state = reduceAgentEvent(state, {
+      run_id: 'run',
+      type: 'assistant_message',
+      message: { content: '完整回答' },
+      event_seq: 2,
+    })
+    expect(state.content).toBe('完整回答')
+    expect(state.lastSeq).toBe(2)
+  })
+
+  it('tracks recovery boundaries in live state', () => {
+    const recovered = reduceAgentEvent(null, {
+      run_id: 'run',
+      type: 'tool_retry_approved',
+      event_seq: 4,
+    })
+    expect(recovered.status).toBe('running')
+    expect(reduceAgentEvent(recovered, { run_id: 'run', type: 'run_interrupted' }).status).toBe('interrupted')
+  })
 })
 
 describe('desktop approval queue', () => {

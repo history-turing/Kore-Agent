@@ -12,11 +12,18 @@ class EvidenceStore:
         self.db = db
         self.max_records = max_records
 
-    async def record(self, run_id: str, kind: str, data: dict[str, Any]) -> dict[str, Any]:
+    async def record(
+        self,
+        run_id: str,
+        kind: str,
+        data: dict[str, Any],
+        *,
+        evidence_id: str | None = None,
+    ) -> dict[str, Any]:
         run = await self.db.fetchone("SELECT conversation_id FROM runs WHERE id=?", (run_id,))
         raw = str(data.get("output") or "")
         item = {
-            "id": uid(),
+            "id": evidence_id or uid(),
             "run_id": run_id,
             "conversation_id": run["conversation_id"] if run else None,
             "kind": kind,
@@ -28,7 +35,7 @@ class EvidenceStore:
             "created_at": now(),
         }
         await self.db.execute(
-            "INSERT INTO evidence(id,run_id,kind,data_json,created_at) VALUES(?,?,?,?,?)",
+            "INSERT OR IGNORE INTO evidence(id,run_id,kind,data_json,created_at) VALUES(?,?,?,?,?)",
             (item["id"], run_id, kind, dumps(item), item["created_at"]),
         )
         await self.db.execute(
@@ -36,6 +43,31 @@ class EvidenceStore:
             (self.max_records,),
         )
         return item
+
+    async def backfill_from_runtime_events(self, *, limit: int = 2_000) -> int:
+        rows = await self.db.fetchall(
+            "SELECT r.run_id,r.event_seq,r.payload_json FROM runtime_events r "
+            "LEFT JOIN evidence e ON e.id='ev:'||r.run_id||':'||r.event_seq "
+            "WHERE r.type='tool_result' AND e.id IS NULL ORDER BY r.created_at LIMIT ?",
+            (max(1, min(limit, 10_000)),),
+        )
+        for row in rows:
+            payload = loads(row["payload_json"], {})
+            result = payload.get("tool_result") or {}
+            await self.record(
+                str(row["run_id"]),
+                "tool_result",
+                {
+                    "tool_call_id": result.get("tool_call_id"),
+                    "tool_name": result.get("tool_name"),
+                    "success": result.get("success"),
+                    "output": result.get("output") or result.get("error") or "",
+                    "error": result.get("error"),
+                    "duration_ms": result.get("duration_ms"),
+                },
+                evidence_id=f"ev:{row['run_id']}:{row['event_seq']}",
+            )
+        return len(rows)
 
     async def get(self, evidence_id: str) -> dict[str, Any]:
         row = await self.db.fetchone("SELECT data_json FROM evidence WHERE id=?", (evidence_id,))

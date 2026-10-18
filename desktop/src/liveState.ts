@@ -14,6 +14,7 @@ export type LiveRunState = {
   toolActivity: LiveTool[]
   status: string
   budgetStatus?: string
+  lastSeq?: number
 }
 
 export function reduceAgentEvent(previous: LiveRunState | null, event: any): LiveRunState {
@@ -28,16 +29,27 @@ export function reduceAgentEvent(previous: LiveRunState | null, event: any): Liv
           tools: [],
           toolActivity: [],
           status: 'running',
+          lastSeq: 0,
         }
+  const withSeq: LiveRunState = {
+    ...current,
+    lastSeq: Number(event.event_seq || event.sequence || current.lastSeq || 0),
+  }
   if (event.type === 'assistant_delta')
-    return { ...current, content: current.content + String(event.delta || '') }
+    return { ...withSeq, content: current.content + String(event.delta || '') }
   if (event.type === 'reasoning_delta')
-    return { ...current, reasoning: current.reasoning + String(event.delta || '') }
+    return { ...withSeq, reasoning: current.reasoning + String(event.delta || '') }
+  if (event.type === 'assistant_message')
+    return {
+      ...withSeq,
+      content: String(event.message?.content || ''),
+      reasoning: String(event.message?.reasoning || ''),
+    }
   if (event.type === 'tool_call') {
     const name = String(event.tool_call?.name || 'tool')
     const id = String(event.tool_call?.id || `${name}:${current.toolActivity.length}`)
     return {
-      ...current,
+      ...withSeq,
       tools: [...current.tools, name],
       toolActivity: [...current.toolActivity, { id, name, status: 'running' }],
     }
@@ -47,7 +59,7 @@ export function reduceAgentEvent(previous: LiveRunState | null, event: any): Liv
     const success = event.tool_result?.success !== false
     // Match by call ID: tools with the same name can be active in one run.
     return {
-      ...current,
+      ...withSeq,
       toolActivity: current.toolActivity.map((item) =>
         item.id === id
           ? {
@@ -60,10 +72,12 @@ export function reduceAgentEvent(previous: LiveRunState | null, event: any): Liv
     }
   }
   if (event.type?.startsWith('run_budget_'))
-    return { ...current, budgetStatus: event.type.replace('run_budget_', '') }
-  if (event.type === 'agent_failed') return { ...current, status: 'failed' }
-  if (event.type === 'agent_completed') return { ...current, status: 'completed' }
-  return current
+    return { ...withSeq, budgetStatus: event.type.replace('run_budget_', '') }
+  if (event.type === 'agent_failed') return { ...withSeq, status: 'failed' }
+  if (event.type === 'agent_completed') return { ...withSeq, status: 'completed' }
+  if (event.type === 'run_interrupted') return { ...withSeq, status: 'interrupted' }
+  if (event.type === 'tool_retry_approved') return { ...withSeq, status: 'running' }
+  return withSeq
 }
 
 export function queueDesktopApproval(queue: Approval[], approval: Approval): Approval[] {

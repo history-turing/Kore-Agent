@@ -1958,6 +1958,12 @@ summary:focus-visible {
   padding: 6px 8px;
   font-size: 12px;
 }
+.chat-task-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
 .chat-task-panel progress {
   width: 100%;
   height: 5px;

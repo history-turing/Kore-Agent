@@ -48,6 +48,8 @@ class Settings:
     run_warning_model_calls: int = int(os.getenv("KORENEXT_RUN_WARNING_MODEL_CALLS", "16"))
     run_finalization_model_calls: int = int(os.getenv("KORENEXT_RUN_FINALIZATION_MODEL_CALLS", "20"))
     run_hard_model_calls: int = int(os.getenv("KORENEXT_RUN_HARD_MODEL_CALLS", "24"))
+    runtime_retention_days: int = int(os.getenv("KORENEXT_RUNTIME_RETENTION_DAYS", "30"))
+    maintenance_interval_seconds: int = int(os.getenv("KORENEXT_MAINTENANCE_INTERVAL_SECONDS", "86400"))
 
     @property
     def database(self) -> Path:

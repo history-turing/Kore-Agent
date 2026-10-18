@@ -105,7 +105,7 @@ automation tick
 
 ## 运行事实与投影
 
-`runtime_events` 是新增的运行事实日志，记录 `turn_id`、`run_id`、`invocation_id`、`event_seq` 和 digest。现有 `events` 表暂时保留用于兼容 Trace；后续阶段会把 UI、模型上下文和终态读取逐步切换到同一份事件日志。
+`runtime_events` 是新增的运行事实日志，记录 `turn_id`、`run_id`、`invocation_id`、`event_seq` 和 digest。现有 `events` 表暂时保留用于兼容 Trace；UI 增量读取和 Trace 已经优先使用事件日志。
 
 `runtime_projections.py` 提供纯函数式的消息与终态投影。投影只读取事件，不修改事件历史；工具执行状态由 `tool_executions` 表持久化，派发和结果分别提交。
 
@@ -114,3 +114,9 @@ automation tick
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
 
 前端和 Trace 通过 `run.events(after_seq, limit)` 增量读取 `runtime_events`；`trace.get` 也优先使用事件日志，旧 `events` 表只在历史 Run 没有迁移数据时回退。
+
+## 未知工具结果与后台维护
+
+如果中断发生在工具派发和结果提交之间，Run 会进入 `tool_unknown`，不会自动重放。用户可以通过 `run.resolve_tool` 选择 `retry`（明确确认后重新派发）或 `abandon`（写入占位 tool result、修复会话结构并终止该 Run）。桌面端会在会话任务面板和运行详情页提供对应操作。
+
+消息全文索引只覆盖 `user` / `assistant` 消息，避免工具大结果同步触发 FTS 写入。证据索引改为运行后异步写入，并由 `EvidenceStore.backfill_from_runtime_events` 在启动时从事件日志补建。`MaintenanceService` 按保留策略清理旧兼容 Trace、证据索引和无人引用的归档文件；`runtime_events`、检查点和会话消息不会被自动删除。

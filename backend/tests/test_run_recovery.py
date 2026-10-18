@@ -68,6 +68,7 @@ async def test_interrupted_tool_requires_reconciliation_and_is_not_replayed(reco
     await asyncio.wait_for(started.wait(), 5)
     interrupted = await app.run_interrupt({"run_id": run["id"]})
     assert interrupted["run"]["status"] == "interrupted"
+    assert interrupted["run"]["stop_reason"] == "tool_unknown"
     await asyncio.gather(task, return_exceptions=True)
     app.running.pop(run["id"], None)
 
@@ -75,7 +76,7 @@ async def test_interrupted_tool_requires_reconciliation_and_is_not_replayed(reco
         "SELECT status FROM tool_executions WHERE run_id=? AND call_id=?",
         (run["id"], "call-1"),
     )
-    assert execution["status"] == "dispatched"
+    assert execution["status"] == "unknown"
     with pytest.raises(RpcFault) as error:
         await app.run_recover({"run_id": run["id"]})
     assert error.value.code == -32002
@@ -324,3 +325,83 @@ async def test_large_tool_result_is_offloaded_before_the_model_sees_it(recovery_
     assert row["size_bytes"] == 70_000
     chunk = await app.context_offload.read(row["sha256"], limit=5)
     assert chunk["content"] == "xxxxx"
+
+
+async def _interrupt_during_tool(app: Application, monkeypatch, run: dict, tool):
+    started = asyncio.Event()
+
+    async def fake_complete(_self, *_args, **_kwargs):
+        return ModelReply(
+            content="",
+            reasoning=None,
+            tool_calls=[{"id": "call-1", "name": "task_list", "arguments": {}}],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    async def wrapped_tool(*args, **kwargs):
+        started.set()
+        return await tool(*args, **kwargs)
+
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.execute", wrapped_tool)
+    task = asyncio.create_task(app._execute_run(run))
+    app.running[run["id"]] = task
+    await asyncio.wait_for(started.wait(), 5)
+    await app.run_interrupt({"run_id": run["id"]})
+    await asyncio.gather(task, return_exceptions=True)
+    app.running.pop(run["id"], None)
+
+
+async def test_unknown_tool_can_be_retried_after_explicit_resolution(recovery_app, monkeypatch):
+    app = recovery_app
+    _, run = await _conversation_and_run(app)
+    mode = {"value": "hang"}
+    tool_calls = 0
+
+    async def tool(*_args, **_kwargs):
+        nonlocal tool_calls
+        tool_calls += 1
+        if mode["value"] == "hang":
+            await asyncio.Event().wait()
+        return "retried output"
+
+    await _interrupt_during_tool(app, monkeypatch, run, tool)
+    mode["value"] = "ok"
+    calls = 0
+
+    async def final_complete(_self, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return ModelReply(
+            content="recovered",
+            reasoning=None,
+            tool_calls=[],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", final_complete)
+    result = await app.run_resolve_tool({"run_id": run["id"], "action": "retry"})
+    assert result["action"] == "retry"
+    assert result["recovery"]["result"]["final_message"]["content"] == "recovered"
+    assert tool_calls == 2
+
+
+async def test_unknown_tool_can_be_abandoned_and_repairs_conversation(recovery_app, monkeypatch):
+    app = recovery_app
+    conversation, run = await _conversation_and_run(app)
+
+    async def tool(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    await _interrupt_during_tool(app, monkeypatch, run, tool)
+    result = await app.run_resolve_tool({"run_id": run["id"], "action": "abandon"})
+    assert result["run"]["status"] == "failed"
+    assert result["run"]["stop_reason"] == "tool_abandoned"
+    messages = (await app.conversation_get({"conversation_id": conversation["id"]}))["messages"]
+    assert [(message["role"], message.get("tool_call_id")) for message in messages][-2:] == [
+        ("assistant", None),
+        ("tool", "call-1"),
+    ]
+    with pytest.raises(RpcFault) as error:
+        await app.run_recover({"run_id": run["id"]})
+    assert error.value.code == -32001

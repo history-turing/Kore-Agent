@@ -12,6 +12,7 @@ from ..rpc import RpcFault, required
 from ..run_insights import summarize_run_usage
 from ..runtime_policy import RunBudget
 from ..util import dumps, loads, now, uid
+from .conversations import ConversationService
 from .runtime_events import RuntimeEventStore
 from .runtime_projections import project_model_messages
 
@@ -58,6 +59,7 @@ class RunStore:
     def __init__(
         self,
         db: Database,
+        conversations: ConversationService,
         checkpoints: CheckpointStore,
         run_budget: RunBudget,
         *,
@@ -67,6 +69,7 @@ class RunStore:
         execute_run: ExecuteRun,
     ):
         self.db = db
+        self.conversations = conversations
         self.checkpoints = checkpoints
         self.run_budget = run_budget
         self._settings = settings
@@ -212,6 +215,18 @@ class RunStore:
                 "SELECT * FROM tool_executions WHERE run_id=? AND call_id=?",
                 (run["id"], call["id"]),
             )
+            if row and row["status"] == "retry_approved":
+                await self.db.execute_on(
+                    conn,
+                    "UPDATE tool_executions SET status='dispatched',started_at=?,finished_at=NULL,error=NULL "
+                    "WHERE run_id=? AND call_id=?",
+                    (now(), run["id"], call["id"]),
+                )
+                row = await self.db.fetchone_on(
+                    conn,
+                    "SELECT * FROM tool_executions WHERE run_id=? AND call_id=?",
+                    (run["id"], call["id"]),
+                )
         return dict(row) if row else {}
 
     async def finish_tool(
@@ -260,6 +275,19 @@ class RunStore:
             "UPDATE automation_occurrences SET state='interrupted' WHERE run_id IN "
             "(SELECT id FROM runs WHERE status='interrupted' AND stop_reason='host_restart')"
         )
+        dispatched = await self.db.fetchall(
+            "SELECT run_id,call_id FROM tool_executions WHERE status='dispatched' "
+            "AND run_id IN (SELECT id FROM runs WHERE status='interrupted' AND stop_reason='host_restart')"
+        )
+        for row in dispatched:
+            await self.db.execute(
+                "UPDATE tool_executions SET status='unknown',finished_at=?,error=? WHERE run_id=? AND call_id=?",
+                (stamp, "Host restarted before outcome was recorded", row["run_id"], row["call_id"]),
+            )
+            await self.db.execute(
+                "UPDATE runs SET stop_reason='tool_unknown',updated_at=? WHERE id=?",
+                (stamp, row["run_id"]),
+            )
         return len(rows)
 
     async def list(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -295,10 +323,21 @@ class RunStore:
     async def interrupt(self, params: dict[str, Any]) -> dict[str, Any]:
         result = await self.cancel(params)
         if result["run"]["status"] == "cancelled":
-            await self.db.execute(
-                "UPDATE runs SET status='interrupted',stop_reason='interrupted' WHERE id=?",
+            dispatched = await self.db.fetchall(
+                "SELECT call_id FROM tool_executions WHERE run_id=? AND status='dispatched'",
                 (result["run"]["id"],),
             )
+            stop_reason = "tool_unknown" if dispatched else "interrupted"
+            await self.db.execute(
+                "UPDATE runs SET status='interrupted',stop_reason=? WHERE id=?",
+                (stop_reason, result["run"]["id"]),
+            )
+            if dispatched:
+                await self.db.execute(
+                    "UPDATE tool_executions SET status='unknown',finished_at=?,error=? "
+                    "WHERE run_id=? AND status='dispatched'",
+                    (now(), "Interrupted before outcome was recorded", result["run"]["id"]),
+                )
             run = (await self.get({"run_id": result["run"]["id"]}))["run"]
             await self.event(
                 run,
@@ -307,6 +346,8 @@ class RunStore:
                 tool_call=None,
                 tool_result=None,
                 usage=None,
+                stop_reason=stop_reason,
+                unknown_tool_call_ids=[row["call_id"] for row in dispatched],
             )
         return await self.get(params)
 
@@ -362,6 +403,8 @@ class RunStore:
             raise self._unknown_tool_fault(old["id"], state)
         if phase == "blocked":
             raise RpcFault(-32001, "Run stopped by runtime policy and cannot be resumed")
+        if phase == "abandoned":
+            raise RpcFault(-32001, "Run was abandoned after an unknown tool outcome")
         if phase in {"assistant_ready", "tools_running"}:
             pending = list(state.get("pending_tool_calls") or [])
             step = int(state.get("next_step") or 1)
@@ -415,6 +458,123 @@ class RunStore:
                 "UPDATE tool_executions SET status='unknown',finished_at=? WHERE run_id=? AND call_id=?",
                 (now(), run["id"], str(call_id)),
             )
+
+    async def resolve_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        run = (await self.get(params))["run"]
+        if run.get("stop_reason") != "tool_unknown":
+            raise RpcFault(-32001, "Run has no unresolved tool outcome")
+        action = str(params.get("action") or "")
+        if action not in {"retry", "abandon"}:
+            raise RpcFault(-32602, "action must be retry or abandon")
+        checkpoint = await self.checkpoints.get(run["id"])
+        if checkpoint is None:
+            raise RpcFault(-32001, "Run has no checkpoint")
+        state = dict(checkpoint["state"])
+        pending = list(state.get("pending_tool_calls") or [])
+        step = int(state.get("next_step") or 1)
+        executions = await self.tool_executions(run["id"], step=step)
+        unknown = [
+            call
+            for call in pending
+            if executions.get(str(call.get("id")), {}).get("status") in {"unknown", "dispatched"}
+        ]
+        requested = params.get("call_id")
+        if requested is not None:
+            unknown = [call for call in unknown if str(call.get("id")) == str(requested)]
+        if len(unknown) != 1:
+            raise RpcFault(
+                -32001,
+                "Resolve exactly one unknown tool call",
+                {"call_ids": [call.get("id") for call in unknown]},
+            )
+        call = unknown[0]
+        call_id = str(call["id"])
+        index = next((position for position, item in enumerate(pending) if item.get("id") == call_id), 0)
+
+        if action == "retry":
+            state["approved_retry_call_ids"] = [call_id]
+            state["tool_cursor"] = min(int(state.get("tool_cursor") or index), index)
+            state["phase"] = "assistant_ready" if index == 0 else "tools_running"
+            async with self.db.transaction() as conn:
+                await self.db.execute_on(
+                    conn,
+                    "UPDATE tool_executions SET status='retry_approved',finished_at=?,error=? "
+                    "WHERE run_id=? AND call_id=?",
+                    (now(), "Retry approved by user", run["id"], call_id),
+                )
+                event = await self.event(
+                    run,
+                    "tool_retry_approved",
+                    conn=conn,
+                    step=step,
+                    tool_call=call,
+                    message=None,
+                    tool_result=None,
+                    usage=None,
+                )
+                await self.checkpoints.save(
+                    run_id=run["id"],
+                    conversation_id=checkpoint["conversation_id"],
+                    sequence=checkpoint["sequence"],
+                    state=state,
+                    through_event_seq=event["event_seq"],
+                    digest=event["runtime_digest"],
+                    conn=conn,
+                )
+            await self.broadcast_event(event)
+            recovered = await self.recover({"run_id": run["id"]})
+            return {"action": "retry", "run": recovered["run"], "recovery": recovered}
+
+        message = f"Tool outcome unknown after host restart; user chose not to retry {call['name']} ({call_id})."
+        run.update(
+            status="failed",
+            updated_at=now(),
+            completed_at=now(),
+            error=message,
+            stop_reason="tool_abandoned",
+        )
+        state["phase"] = "abandoned"
+        tool_message = {
+            "role": "tool",
+            "content": message,
+            "name": call["name"],
+            "tool_call_id": call_id,
+        }
+        async with self.db.transaction() as conn:
+            await self.db.execute_on(
+                conn,
+                "UPDATE tool_executions SET status='abandoned',finished_at=?,error=? WHERE run_id=? AND call_id=?",
+                (now(), message, run["id"], call_id),
+            )
+            await self.conversations.add_message(run["conversation_id"], tool_message, conn=conn)
+            event = await self.event(
+                run,
+                "tool_unknown_abandoned",
+                conn=conn,
+                step=step,
+                message=None,
+                tool_call=call,
+                tool_result={
+                    "tool_call_id": call_id,
+                    "tool_name": call["name"],
+                    "success": False,
+                    "output": "",
+                    "error": message,
+                },
+                usage=None,
+            )
+            await self.checkpoints.save(
+                run_id=run["id"],
+                conversation_id=checkpoint["conversation_id"],
+                sequence=checkpoint["sequence"],
+                state=state,
+                through_event_seq=event["event_seq"],
+                digest=event["runtime_digest"],
+                conn=conn,
+            )
+            await self.save(run, conn=conn)
+        await self.broadcast_event(event)
+        return {"action": "abandon", "run": (await self.get({"run_id": run["id"]}))["run"]}
 
     @staticmethod
     def _unknown_tool_fault(run_id: str, details: dict[str, Any]) -> RpcFault:

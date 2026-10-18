@@ -93,6 +93,8 @@ Computer Helper 当前仅在 macOS 上可用。Windows 没有可靠工作区沙�
 
 默认运行数据位于 `backend/.koreagent-next`，工作文件位于 `backend/workspace`，可通过 `KORENEXT_DATA_DIR` 和 `KORENEXT_WORKSPACE_DIR` 覆盖。数据库升级前会自动生成 `backup-v*` 快照并记录版本。所有配置均使用 `KORENEXT_` 前缀。
 
+运行日志和辅助索引的保留天数由 `KORENEXT_RUNTIME_RETENTION_DAYS` 控制（默认 30 天），后台清理间隔由 `KORENEXT_MAINTENANCE_INTERVAL_SECONDS` 控制（默认 86400 秒）。`system.maintenance` 默认只返回清理预览；显式传入 `dry_run: false` 才会删除旧的兼容 Trace、证据索引和不再被引用的归档结果。
+
 模型密钥不会进入数据库导出或日志。桌面端保存密钥时使用独立的 KoreAgent Next 密钥命名空间；`.env`、数据库、虚拟环境、依赖与构建目录均被 Git 忽略。
 
 ## 验证

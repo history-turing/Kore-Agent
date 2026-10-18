@@ -17,18 +17,23 @@ class RpcClient {
   private sequence = 0
   private pending = new Map<number, { resolve(value: any): void; reject(reason: any): void; timer: number }>()
   private handlers = new Map<string, Set<NotificationHandler>>()
+  private statusHandlers = new Set<(status: RpcClient['status']) => void>()
   private reconnect?: number
   status: 'connecting' | 'connected' | 'offline' = 'offline'
   onStatus?: (status: RpcClient['status']) => void
 
+  private setStatus(status: RpcClient['status']) {
+    this.status = status
+    this.onStatus?.(status)
+    this.statusHandlers.forEach((handler) => handler(status))
+  }
+
   connect() {
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) return
-    this.status = 'connecting'
-    this.onStatus?.(this.status)
+    this.setStatus('connecting')
     this.socket = new WebSocket(rpcUrl())
     this.socket.onopen = () => {
-      this.status = 'connected'
-      this.onStatus?.(this.status)
+      this.setStatus('connected')
     }
     this.socket.onmessage = (event) => {
       let msg: any
@@ -48,8 +53,7 @@ class RpcClient {
       } else if (msg.method) this.handlers.get(msg.method)?.forEach((handler) => handler(msg.params))
     }
     this.socket.onclose = () => {
-      this.status = 'offline'
-      this.onStatus?.(this.status)
+      this.setStatus('offline')
       // A request from the old connection cannot receive a reply after reconnect.
       this.pending.forEach((item) => {
         window.clearTimeout(item.timer)
@@ -81,7 +85,10 @@ class RpcClient {
     const id = ++this.sequence
     return new Promise<T>((resolve, reject) => {
       // A run may wait for tool approval, so it needs a longer RPC timeout.
-      const timeout = method === 'conversation.send' || method === 'run.recover' ? 30 * 60_000 : 30_000
+      const timeout =
+        method === 'conversation.send' || method === 'run.recover' || method === 'run.resolve_tool'
+          ? 30 * 60_000
+          : 30_000
       const timer = window.setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`${method} 请求超时，请检查 Host 状态后重试。`))
@@ -95,6 +102,12 @@ class RpcClient {
     this.handlers.get(method)!.add(handler)
     return () => {
       this.handlers.get(method)?.delete(handler)
+    }
+  }
+  onStatusChange(handler: (status: RpcClient['status']) => void) {
+    this.statusHandlers.add(handler)
+    return () => {
+      this.statusHandlers.delete(handler)
     }
   }
 }

@@ -107,6 +107,18 @@ async def test_existing_messages_are_indexed_during_database_upgrade(tmp_path: P
     assert [row["rowid"] for row in rows] == [1]
 
 
+async def test_fts_skips_tool_result_payloads(database: Database):
+    await database.execute("INSERT INTO conversations VALUES('c','Conversation','now','now')")
+    await database.execute(
+        "INSERT INTO messages(conversation_id,role,content,created_at) VALUES('c','user','needle user','now')"
+    )
+    await database.execute(
+        "INSERT INTO messages(conversation_id,role,content,created_at) VALUES('c','tool','needle tool','now')"
+    )
+    rows = await database.fetchall("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'needle'")
+    assert [row["rowid"] for row in rows] == [1]
+
+
 async def test_task_plan_requires_a_single_decision(database: Database):
     service = TaskService(database)
     task = await service.create(title="Plan", goal="Ship", steps=[{"title": "Build"}], status="pending")
@@ -435,6 +447,63 @@ async def test_evidence_keeps_raw_output_and_filters_before_limit(database: Data
     assert found[0]["conversation_id"] == "conversation-evidence"
     assert found[0]["task_step"] == 2
     assert len(found[0]["content_sha256"]) == 64
+
+
+async def test_evidence_backfills_from_runtime_event_log(database: Database):
+    stamp = now()
+    await database.execute(
+        "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "run-evidence-log",
+            "conversation-evidence-log",
+            "completed",
+            "task",
+            stamp,
+            stamp,
+            stamp,
+            stamp,
+            None,
+            "completed",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "normal",
+        ),
+    )
+    await database.execute(
+        "INSERT INTO runtime_events("
+        "event_id,conversation_id,turn_id,run_id,event_seq,type,payload_json,created_at,schema_version,digest"
+        ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (
+            "runtime-evidence",
+            "conversation-evidence-log",
+            "run-evidence-log",
+            "run-evidence-log",
+            7,
+            "tool_result",
+            dumps(
+                {
+                    "tool_result": {
+                        "tool_call_id": "call-7",
+                        "tool_name": "read_file",
+                        "success": True,
+                        "output": "content",
+                        "error": None,
+                    }
+                }
+            ),
+            stamp,
+            1,
+            "digest",
+        ),
+    )
+    store = EvidenceStore(database)
+    assert await store.backfill_from_runtime_events() == 1
+    row = await database.fetchone("SELECT * FROM evidence WHERE id='ev:run-evidence-log:7'")
+    assert row["run_id"] == "run-evidence-log"
+    assert await store.backfill_from_runtime_events() == 0
 
 
 async def test_database_upgrade_keeps_old_data_and_creates_backup(tmp_path: Path):

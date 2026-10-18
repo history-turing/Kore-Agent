@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -45,6 +45,10 @@ export function Chat({
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<'normal' | 'plan'>('normal')
   const [live, setLive] = useState<LiveRunState | null>(null)
+  const liveRef = useRef<LiveRunState | null>(null)
+  useEffect(() => {
+    liveRef.current = live
+  }, [live])
   const [planTaskId, setPlanTaskId] = useState<string | null>(null)
   const [drawer, setDrawer] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -54,6 +58,9 @@ export function Chat({
   useEffect(() => {
     if (initialConversationId) setSelected(initialConversationId)
   }, [initialConversationId])
+  useEffect(() => {
+    setLive(null)
+  }, [selected])
   useEffect(() => {
     if (requestedMode) setMode(requestedMode)
   }, [requestedMode])
@@ -96,6 +103,35 @@ export function Chat({
     queryFn: () =>
       rpc.call<{ runs: Run[] }>('run.list', { conversation_id: selected, limit: 20 }).then((x) => x.runs),
   })
+  const catchUpRun = useCallback(async (runId: string, afterSeq = 0) => {
+    try {
+      const result = await rpc.call<{ events: any[] }>('run.events', {
+        run_id: runId,
+        after_seq: afterSeq,
+        limit: 2000,
+      })
+      if (result.events.length)
+        setLive((previous) =>
+          result.events.reduce((state, event) => reduceAgentEvent(state, event), previous),
+        )
+    } catch {
+      // The next reconnect or run-list refresh retries the catch-up.
+    }
+  }, [])
+  useEffect(() => {
+    if (!selected || liveRef.current?.runId) return
+    const active = runs.data?.find(
+      (item) => item.conversation_id === selected && ['running', 'pending'].includes(item.status),
+    )
+    if (active) void catchUpRun(active.id)
+  }, [runs.data, selected, catchUpRun])
+  useEffect(() => {
+    return rpc.onStatusChange((status) => {
+      if (status !== 'connected') return
+      const active = liveRef.current
+      if (active?.runId) void catchUpRun(active.runId, active.lastSeq || 0)
+    })
+  }, [catchUpRun])
   const artifacts = useQuery({
     queryKey: ['artifacts', selected],
     enabled: !!selected,
@@ -180,6 +216,27 @@ export function Chat({
       qc.invalidateQueries({ queryKey: ['conversation', selected] })
     },
   })
+  const resolveTool = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'retry' | 'abandon' }) =>
+      rpc.call('run.resolve_tool', { run_id: id, action }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['runs', selected] })
+      qc.invalidateQueries({ queryKey: ['conversation', selected] })
+    },
+  })
+  const resolveUnknownTool = (id: string, action: 'retry' | 'abandon') => {
+    if (action === 'abandon') {
+      resolveTool.mutate({ id, action })
+      return
+    }
+    void confirmAction({
+      title: '重新执行这个工具？',
+      message: '上一次工具调用可能已经产生副作用。只有确认可以安全重试时才继续。',
+      confirmLabel: '确认重试',
+    }).then((yes) => {
+      if (yes) resolveTool.mutate({ id, action })
+    })
+  }
   const plan = useQuery({
     queryKey: ['task', planTaskId],
     enabled: !!planTaskId,
@@ -323,6 +380,8 @@ export function Chat({
               onOpenRun={onOpenRun}
               recovering={recover.isPending}
               onRecover={(id) => recover.mutate(id)}
+              resolving={resolveTool.isPending}
+              onResolveTool={resolveUnknownTool}
             />
             {tasks.error && (
               <div className="chat-query-error" role="alert">
@@ -372,6 +431,7 @@ export function Chat({
             )}{' '}
             {send.error && <ErrorBox error={send.error} />}{' '}
             {recover.error && <ErrorBox error={recover.error} />}
+            {resolveTool.error && <ErrorBox error={resolveTool.error} />}
             <div className="composer">
               <textarea
                 value={input}
@@ -429,12 +489,16 @@ function TaskPanel({
   onOpenRun,
   onRecover,
   recovering,
+  onResolveTool,
+  resolving,
 }: {
   task?: Task
   run?: Run
   onOpenRun(id: string): void
   onRecover(id: string): void
   recovering: boolean
+  onResolveTool(id: string, action: 'retry' | 'abandon'): void
+  resolving: boolean
 }) {
   if (!task && !run) return null
   const done = task?.steps.filter((step) => step.status === 'completed').length || 0
@@ -459,14 +523,32 @@ function TaskPanel({
               查看运行 <ChevronRight size={14} />
             </button>
           )}
-          {run && ['interrupted', 'failed', 'cancelled'].includes(run.status) && (
-            <button disabled={recovering} onClick={() => onRecover(run.id)}>
-              <RefreshCw size={14} />
-              恢复
-            </button>
+          {run && run.stop_reason === 'tool_unknown' && (
+            <>
+              <button disabled={resolving} onClick={() => onResolveTool(run.id, 'retry')}>
+                <RefreshCw size={14} />
+                确认重试
+              </button>
+              <button disabled={resolving} onClick={() => onResolveTool(run.id, 'abandon')}>
+                放弃并修复
+              </button>
+            </>
           )}
+          {run &&
+            run.stop_reason !== 'tool_unknown' &&
+            ['interrupted', 'failed', 'cancelled'].includes(run.status) && (
+              <button disabled={recovering} onClick={() => onRecover(run.id)}>
+                <RefreshCw size={14} />
+                恢复
+              </button>
+            )}
         </div>
       </div>
+      {run?.stop_reason === 'tool_unknown' && (
+        <p className="chat-task-note">
+          工具执行结果未知，系统已停止自动恢复。请确认是否可以安全重试，或放弃并保留一条可继续对话的占位结果。
+        </p>
+      )}
       {task && total > 0 && (
         <>
           <progress max={total} value={done} aria-label="任务完成进度" />

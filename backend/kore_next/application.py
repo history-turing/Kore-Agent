@@ -14,6 +14,7 @@ from .context import ContextManager
 from .context_offload import ContextOffloadStore
 from .database import Database
 from .evidence import EvidenceStore
+from .maintenance import MaintenanceService
 from .mcp import McpManager
 from .memory import MemoryService
 from .model import ModelClient
@@ -61,6 +62,12 @@ class Application:
         self.computer = ComputerClient(self.settings, self._store_observation)
         self.context_manager = ContextManager(self.db)
         self.context_offload = ContextOffloadStore(self.db, self.settings.data_dir / "context-offload")
+        self.maintenance = MaintenanceService(
+            self.db,
+            self.settings.data_dir / "context-offload",
+            retention_days=self.settings.runtime_retention_days,
+            interval_seconds=self.settings.maintenance_interval_seconds,
+        )
         self.checkpoints = CheckpointStore(self.db)
         self.memory_service = MemoryService(self.db)
         self.task_service = TaskService(self.db)
@@ -84,6 +91,7 @@ class Application:
         self.background_tasks: set[asyncio.Task[Any]] = set()
         self.triggering_automations: set[str] = set()
         self.automation_task: asyncio.Task[Any] | None = None
+        self.maintenance_task: asyncio.Task[Any] | None = None
 
         self.conversations = ConversationService(self.db)
         self.model_settings = ModelSettingsService(
@@ -96,6 +104,7 @@ class Application:
         )
         self.runs = RunStore(
             self.db,
+            self.conversations,
             self.checkpoints,
             self.run_budget,
             settings=lambda: self.settings,
@@ -196,6 +205,7 @@ class Application:
     async def start(self) -> None:
         await self.db.initialize()
         await self.runs.recover_stale_runs()
+        await self.evidence.backfill_from_runtime_events(limit=2_000)
         await self.skill_service.migrate_user_skills()
         await self.skill_learning.scan_completed_runs(existing_skills=await self.skill_service.skills(), limit=100)
         mcp = await self.mcp_settings.mcp()
@@ -203,10 +213,13 @@ class Application:
         await self.computer.start()
         await self.automations.restore()
         self.automation_task = asyncio.create_task(self.automations.loop())
+        self.maintenance_task = asyncio.create_task(self.maintenance.loop())
 
     async def close(self) -> None:
         if self.automation_task:
             self.automation_task.cancel()
+        if self.maintenance_task:
+            self.maintenance_task.cancel()
         for task in self.running.values():
             task.cancel()
         for task in self.background_tasks:
@@ -218,7 +231,12 @@ class Application:
                 await self.approvals.cancel(approval_id)
             except Exception:
                 pass
-        await asyncio.gather(*self.running.values(), *self.background_tasks, return_exceptions=True)
+        await asyncio.gather(
+            *self.running.values(),
+            *self.background_tasks,
+            *([self.maintenance_task] if self.maintenance_task else []),
+            return_exceptions=True,
+        )
         await self.mcp_manager.close()
         await self.computer.close()
 
@@ -226,6 +244,7 @@ class Application:
         return {
             "system.info": self.system_info,
             "system.restart": self.system_restart,
+            "system.maintenance": self.system_maintenance,
             "model_settings.get": self.model_settings_get,
             "model_settings.update": self.model_settings_update,
             "model_settings.test": self.model_settings_test,
@@ -241,6 +260,7 @@ class Application:
             "run.cancel": self.run_cancel,
             "run.interrupt": self.run_interrupt,
             "run.recover": self.run_recover,
+            "run.resolve_tool": self.run_resolve_tool,
             "run.events": self.run_events,
             "trace.get": self.trace_get,
             "automation.list": self.automation_list,
@@ -319,6 +339,9 @@ class Application:
         await self.computer.start()
         return {"accepted": True}
 
+    async def system_maintenance(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self.maintenance.prune(dry_run=params.get("dry_run", True) is not False)
+
     async def model_settings_get(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.model_settings.view()
 
@@ -390,6 +413,9 @@ class Application:
 
     async def run_recover(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.runs.recover(params)
+
+    async def run_resolve_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self.runs.resolve_tool(params)
 
     async def run_events(self, params: dict[str, Any]) -> dict[str, Any]:
         run_id = str(required(params, "run_id"))

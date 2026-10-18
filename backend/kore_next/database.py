@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
  content, content='messages', content_rowid='id', tokenize='trigram'
 );
-CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages
+WHEN new.role IN ('user','assistant') BEGIN
  INSERT INTO messages_fts(rowid,content) VALUES(new.id,new.content);
 END;
 CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
@@ -115,7 +116,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Database:
@@ -148,6 +149,13 @@ class Database:
                         )
                     if "digest" not in names:
                         await db.execute("ALTER TABLE checkpoints ADD COLUMN digest TEXT")
+            if version < 7:
+                await db.execute("DROP TRIGGER IF EXISTS messages_fts_insert")
+                await db.execute(
+                    "CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages "
+                    "WHEN new.role IN ('user','assistant') BEGIN "
+                    "INSERT INTO messages_fts(rowid,content) VALUES(new.id,new.content); END"
+                )
             if version < 2:
                 await db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
             await db.execute(
