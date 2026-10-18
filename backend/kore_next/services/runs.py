@@ -12,6 +12,7 @@ from ..rpc import RpcFault, required
 from ..run_insights import summarize_run_usage
 from ..runtime_policy import RunBudget
 from ..tools.errors import DuplicateToolCall
+from ..tools.policies import tool_policy
 from ..util import dumps, loads, now, uid
 from .conversations import ConversationService
 from .runtime_events import RuntimeEventStore
@@ -196,18 +197,26 @@ class RunStore:
     async def begin_tool(self, run: dict[str, Any], call: dict[str, Any], step: int) -> dict[str, Any]:
         """Persist the dispatch boundary before a tool can cause side effects."""
         arguments_hash = hashlib.sha256(dumps(call.get("arguments") or {}).encode("utf-8")).hexdigest()
+        policy = tool_policy(
+            str(call.get("name") or ""),
+            call.get("arguments") if isinstance(call.get("arguments"), dict) else None,
+        )
+        policy_value = f"{policy.side_effect}/{policy.recovery}"
+        idempotency_key = f"{run['id']}:{call['id']}"
         async with self.db.transaction() as conn:
             await self.db.execute_on(
                 conn,
                 "INSERT OR IGNORE INTO tool_executions("
-                "run_id,call_id,step,tool_name,arguments_hash,status,started_at"
-                ") VALUES(?,?,?,?,?,'dispatched',?)",
+                "run_id,call_id,step,tool_name,arguments_hash,status,policy,attempt,idempotency_key,started_at"
+                ") VALUES(?,?,?,?,?,'dispatched',?,1,?,?)",
                 (
                     run["id"],
                     call["id"],
                     step,
                     call["name"],
                     arguments_hash,
+                    policy_value,
+                    idempotency_key,
                     now(),
                 ),
             )
@@ -218,12 +227,19 @@ class RunStore:
             )
             if row and (int(row["step"]) != int(step) or str(row["arguments_hash"]) != arguments_hash):
                 raise DuplicateToolCall(f"Tool call id {call['id']} was already used with different arguments or step")
-            if row and row["status"] == "retry_approved":
+            if row and row["status"] in {"retry_approved", "retry_ready"}:
                 await self.db.execute_on(
                     conn,
-                    "UPDATE tool_executions SET status='dispatched',started_at=?,finished_at=NULL,error=NULL "
+                    "UPDATE tool_executions SET status='dispatched',attempt=attempt+1,started_at=?,"
+                    "finished_at=NULL,error=NULL,error_code=NULL,policy=?,idempotency_key=? "
                     "WHERE run_id=? AND call_id=?",
-                    (now(), run["id"], call["id"]),
+                    (
+                        now(),
+                        policy_value,
+                        idempotency_key,
+                        run["id"],
+                        call["id"],
+                    ),
                 )
                 row = await self.db.fetchone_on(
                     conn,
@@ -282,19 +298,42 @@ class RunStore:
             "(SELECT id FROM runs WHERE status='interrupted' AND stop_reason='host_restart')"
         )
         dispatched = await self.db.fetchall(
-            "SELECT run_id,call_id FROM tool_executions WHERE status='dispatched' "
+            "SELECT run_id,call_id,tool_name,policy FROM tool_executions WHERE status='dispatched' "
             "AND run_id IN (SELECT id FROM runs WHERE status='interrupted' AND stop_reason='host_restart')"
         )
         for row in dispatched:
-            await self.db.execute(
-                "UPDATE tool_executions SET status='unknown',finished_at=?,error=? WHERE run_id=? AND call_id=?",
-                (stamp, "Host restarted before outcome was recorded", row["run_id"], row["call_id"]),
-            )
-            await self.db.execute(
-                "UPDATE runs SET stop_reason='tool_unknown',updated_at=? WHERE id=?",
-                (stamp, row["run_id"]),
-            )
+            if self._recovery_for(row) == "safe_retry":
+                await self.db.execute(
+                    "UPDATE tool_executions SET status='retry_ready',finished_at=NULL,error=? "
+                    "WHERE run_id=? AND call_id=?",
+                    (
+                        "Host restarted before outcome was recorded; safe to retry",
+                        row["run_id"],
+                        row["call_id"],
+                    ),
+                )
+            else:
+                await self.db.execute(
+                    "UPDATE tool_executions SET status='unknown',finished_at=?,error=? WHERE run_id=? AND call_id=?",
+                    (
+                        stamp,
+                        "Host restarted before outcome was recorded",
+                        row["run_id"],
+                        row["call_id"],
+                    ),
+                )
+                await self.db.execute(
+                    "UPDATE runs SET stop_reason='tool_unknown',updated_at=? WHERE id=?",
+                    (stamp, row["run_id"]),
+                )
         return len(rows)
+
+    @staticmethod
+    def _recovery_for(row: Any) -> str:
+        stored = str(row["policy"] or "") if "policy" in row.keys() else ""
+        if "/" in stored:
+            return stored.rsplit("/", 1)[-1]
+        return tool_policy(str(row["tool_name"])).recovery
 
     async def list(self, params: dict[str, Any]) -> dict[str, Any]:
         clauses, values = [], []
@@ -330,20 +369,38 @@ class RunStore:
         result = await self.cancel(params)
         if result["run"]["status"] == "cancelled":
             dispatched = await self.db.fetchall(
-                "SELECT call_id FROM tool_executions WHERE run_id=? AND status='dispatched'",
+                "SELECT call_id,tool_name,policy FROM tool_executions WHERE run_id=? AND status='dispatched'",
                 (result["run"]["id"],),
             )
-            stop_reason = "tool_unknown" if dispatched else "interrupted"
+            unknown_ids = []
+            for row in dispatched:
+                if self._recovery_for(row) == "safe_retry":
+                    await self.db.execute(
+                        "UPDATE tool_executions SET status='retry_ready',finished_at=NULL,error=? "
+                        "WHERE run_id=? AND call_id=?",
+                        (
+                            "Interrupted before outcome was recorded; safe to retry",
+                            result["run"]["id"],
+                            row["call_id"],
+                        ),
+                    )
+                else:
+                    unknown_ids.append(row["call_id"])
+                    await self.db.execute(
+                        "UPDATE tool_executions SET status='unknown',finished_at=?,error=? "
+                        "WHERE run_id=? AND call_id=?",
+                        (
+                            now(),
+                            "Interrupted before outcome was recorded",
+                            result["run"]["id"],
+                            row["call_id"],
+                        ),
+                    )
+            stop_reason = "tool_unknown" if unknown_ids else "interrupted"
             await self.db.execute(
                 "UPDATE runs SET status='interrupted',stop_reason=? WHERE id=?",
                 (stop_reason, result["run"]["id"]),
             )
-            if dispatched:
-                await self.db.execute(
-                    "UPDATE tool_executions SET status='unknown',finished_at=?,error=? "
-                    "WHERE run_id=? AND status='dispatched'",
-                    (now(), "Interrupted before outcome was recorded", result["run"]["id"]),
-                )
             run = (await self.get({"run_id": result["run"]["id"]}))["run"]
             await self.event(
                 run,
@@ -353,7 +410,7 @@ class RunStore:
                 tool_result=None,
                 usage=None,
                 stop_reason=stop_reason,
-                unknown_tool_call_ids=[row["call_id"] for row in dispatched],
+                unknown_tool_call_ids=unknown_ids,
             )
         return await self.get(params)
 

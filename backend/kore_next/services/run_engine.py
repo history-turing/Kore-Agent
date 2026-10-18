@@ -23,7 +23,7 @@ from ..rpc import RpcFault
 from ..runtime_policy import RepeatedToolCallGuard, RunBudget, RuntimePolicyError
 from ..tasks import TaskService
 from ..tools import ToolError, ToolExecutor, ToolProjection
-from ..tools.policies import CONCURRENT_READ_TOOLS
+from ..tools.policies import CONCURRENT_READ_TOOLS, tool_policy
 from ..util import dumps, now, uid
 from .approvals import ApprovalService
 from .artifacts import ArtifactService
@@ -902,6 +902,9 @@ class RunEngine:
         call_id = str(call.get("id") or "")
         name = str(call.get("name") or "")
         arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+        policy = tool_policy(name, arguments)
+        policy_value = f"{policy.side_effect}/{policy.recovery}"
+        idempotency_key = f"{run['id']}:{call_id}"
         prepared = None
         dispatched = False
         output = ""
@@ -1034,6 +1037,8 @@ class RunEngine:
                     "error_code": error_code,
                     "retryable": retryable,
                     "dispatched": dispatched,
+                    "policy": policy_value,
+                    "idempotency_key": idempotency_key,
                     "duration_ms": duration_ms,
                     "catalog": catalog_event,
                 },
@@ -1055,6 +1060,8 @@ class RunEngine:
                     "error_code": error_code,
                     "retryable": retryable,
                     "dispatched": dispatched,
+                    "policy": policy_value,
+                    "idempotency_key": idempotency_key,
                     "duration_ms": duration_ms,
                     "task_id": plan_task_id,
                     "task_step": step,

@@ -57,6 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_runtime_events_type ON runtime_events(run_id, typ
 CREATE TABLE IF NOT EXISTS tool_executions(
  run_id TEXT NOT NULL, call_id TEXT NOT NULL, step INTEGER NOT NULL, tool_name TEXT NOT NULL,
  arguments_hash TEXT NOT NULL, status TEXT NOT NULL, output_hash TEXT, error TEXT, error_code TEXT,
+ policy TEXT, attempt INTEGER NOT NULL DEFAULT 1, idempotency_key TEXT,
  started_at TEXT NOT NULL, finished_at TEXT,
  PRIMARY KEY(run_id, call_id)
 );
@@ -116,7 +117,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class Database:
@@ -161,6 +162,15 @@ class Database:
                 names = {row["name"] for row in await columns.fetchall()}
                 if "error_code" not in names:
                     await db.execute("ALTER TABLE tool_executions ADD COLUMN error_code TEXT")
+            if version < 9:
+                columns = await db.execute("PRAGMA table_info(tool_executions)")
+                names = {row["name"] for row in await columns.fetchall()}
+                if "policy" not in names:
+                    await db.execute("ALTER TABLE tool_executions ADD COLUMN policy TEXT")
+                if "attempt" not in names:
+                    await db.execute("ALTER TABLE tool_executions ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1")
+                if "idempotency_key" not in names:
+                    await db.execute("ALTER TABLE tool_executions ADD COLUMN idempotency_key TEXT")
             if version < 2:
                 await db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
             await db.execute(

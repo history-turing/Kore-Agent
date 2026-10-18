@@ -420,7 +420,11 @@ class ToolExecutor:
             return await self._web_search(str(arguments.get("query", "")), int(arguments.get("limit", 5)))
         if name == "http_request":
             method = str(arguments.get("method") or "GET").upper()
-            return await self._http_request(method, arguments)
+            return await self._http_request(
+                method,
+                arguments,
+                idempotency_key=f"{run_id}:{prepared.call_id}",
+            )
         if name == "publish_file":
             path = prepared.path or self.resolve(str(arguments.get("path", "")))
             artifact = await self.publish(
@@ -535,9 +539,17 @@ class ToolExecutor:
             ensure_ascii=False,
         )
 
-    async def _http_request(self, method: str, arguments: dict[str, Any]) -> str:
+    async def _http_request(
+        self,
+        method: str,
+        arguments: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> str:
         url = str(arguments.get("url", ""))
         headers = {str(key): str(value) for key, value in dict(arguments.get("headers") or {}).items()}
+        if idempotency_key and method not in {"GET", "HEAD"}:
+            headers.setdefault("Idempotency-Key", idempotency_key)
         body = arguments.get("body")
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
             for _ in range(10):

@@ -139,3 +139,32 @@ def test_tool_catalog_exposes_optional_tools_only_after_activation(tmp_path: Pat
     assert "memory_read" not in normal
     assert "memory_read" in tool.activate_tools("memory", "normal")["activated"]
     assert "memory_read" in {item["function"]["name"] for group in tool.tool_definitions("normal") for item in group}
+
+
+async def test_http_post_sends_idempotency_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import kore_next.tools.executor as executor_module
+
+    original_client = httpx.AsyncClient
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("Idempotency-Key"))
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(
+        executor_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+    tool = executor(tmp_path)
+
+    async def validate(_url: str) -> None:
+        return None
+
+    monkeypatch.setattr(tool, "_validate_public_url", validate)
+    await tool._http_request(
+        "POST",
+        {"url": "https://example.com/write"},
+        idempotency_key="run-1:call-1",
+    )
+    assert seen == ["run-1:call-1"]

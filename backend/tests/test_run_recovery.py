@@ -52,7 +52,13 @@ async def test_interrupted_tool_requires_reconciliation_and_is_not_replayed(reco
         return ModelReply(
             content="",
             reasoning=None,
-            tool_calls=[{"id": "call-1", "name": "task_list", "arguments": {}}],
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "task_create",
+                    "arguments": {"title": "Recover", "goal": "Test write recovery"},
+                }
+            ],
             usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         )
 
@@ -87,6 +93,55 @@ async def test_interrupted_tool_requires_reconciliation_and_is_not_replayed(reco
     assert recovered["n"] == 0
 
 
+async def test_interrupted_read_only_tool_is_retried_without_manual_resolution(recovery_app, monkeypatch):
+    app = recovery_app
+    _, run = await _conversation_and_run(app)
+    started = asyncio.Event()
+
+    async def fake_complete(_self, *_args, **_kwargs):
+        return ModelReply(
+            content="",
+            reasoning=None,
+            tool_calls=[{"id": "call-1", "name": "task_list", "arguments": {}}],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    async def hanging_tool(*_args, **_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.dispatch", hanging_tool)
+    task = asyncio.create_task(app._execute_run(run))
+    app.running[run["id"]] = task
+    await asyncio.wait_for(started.wait(), 5)
+    interrupted = await app.run_interrupt({"run_id": run["id"]})
+    await asyncio.gather(task, return_exceptions=True)
+    app.running.pop(run["id"], None)
+    assert interrupted["run"]["stop_reason"] == "interrupted"
+    row = await app.db.fetchone(
+        "SELECT status FROM tool_executions WHERE run_id=? AND call_id=?",
+        (run["id"], "call-1"),
+    )
+    assert row["status"] == "retry_ready"
+
+    async def successful_tool(*_args, **_kwargs):
+        return "[]"
+
+    async def final_complete(_self, *_args, **_kwargs):
+        return ModelReply(
+            content="done",
+            reasoning=None,
+            tool_calls=[],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.dispatch", successful_tool)
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", final_complete)
+    recovered = await app.run_recover({"run_id": run["id"]})
+    assert recovered["result"]["final_message"]["content"] == "done"
+
+
 async def test_crash_after_assistant_message_resumes_tools_without_model_replay(recovery_app, monkeypatch):
     app = recovery_app
     _, run = await _conversation_and_run(app)
@@ -98,7 +153,13 @@ async def test_crash_after_assistant_message_resumes_tools_without_model_replay(
         return ModelReply(
             content="",
             reasoning=None,
-            tool_calls=[{"id": "call-1", "name": "task_list", "arguments": {}}],
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "task_create",
+                    "arguments": {"title": "Recover", "goal": "Test write recovery"},
+                }
+            ],
             usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         )
 
@@ -334,7 +395,13 @@ async def _interrupt_during_tool(app: Application, monkeypatch, run: dict, tool)
         return ModelReply(
             content="",
             reasoning=None,
-            tool_calls=[{"id": "call-1", "name": "task_list", "arguments": {}}],
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "task_create",
+                    "arguments": {"title": "Recover", "goal": "Test write recovery"},
+                }
+            ],
             usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         )
 

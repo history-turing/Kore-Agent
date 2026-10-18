@@ -131,6 +131,8 @@ automation tick
 
 `program` 是延迟激活的只读编排工具。模型提交一段短 Python 源程序，通过 `tools.call(name, arguments)` 调用当前已激活的只读工具，并把最终值赋给 `result`。父 Runtime 负责启动独立 worker、逐次执行参数校验与资源租约，并施加 32 次嵌套调用、源码 20KB、输出 200KB 和最长 30 秒的硬配额。worker 使用最小 builtin 集合、AST 白名单和禁止 dunder 属性访问；它运行在独立进程与最小环境中，但不是 OS 级沙箱，因此不应把不受信任的程序视为绝对安全边界。v1 的嵌套调用不单独写 `tool_executions`，事务边界由顶层 `program` 调用承担，`program` 结果中的 `call_log` 保留嵌套调用的审计摘要。
 
+每个工具绑定声明 `side_effect`、`idempotent` 和 `recovery` 策略，并记录在 `tool_executions.policy`、`attempt` 与 `idempotency_key`。纯读工具在宿主重启或中断后进入 `retry_ready`，恢复时可以直接重新派发；文件写、记忆和自动化等写操作进入 `reconcile`；Shell、MCP 和桌面副作用默认进入 `park`，仍需人工核对。非 GET/HEAD 的 HTTP 请求会携带 `run_id:call_id` 形式的 `Idempotency-Key`，便于上游服务去重。
+
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
 
 前端和 Trace 通过 `run.events(after_seq, limit)` 增量读取 `runtime_events`；`trace.get` 也优先使用事件日志，旧 `events` 表只在历史 Run 没有迁移数据时回退。
