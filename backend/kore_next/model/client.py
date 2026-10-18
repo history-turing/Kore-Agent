@@ -8,6 +8,7 @@ import httpx
 from ..config import Settings
 from ..tools.definitions import TOOLS
 from .anthropic_messages import complete_messages
+from .dsml import normalize_reply
 from .openai_chat import complete_chat
 from .openai_responses import complete_responses
 from .presets import resolve_api_style
@@ -56,13 +57,14 @@ class ModelClient:
 
         for attempt in range(3):
             try:
-                return await self._complete_once(
+                reply = await self._complete_once(
                     messages,
                     extra_tools,
                     base_tools,
                     on_text_delta=text_sink if on_text_delta else None,
                     on_reasoning_delta=reasoning_sink if on_reasoning_delta else None,
                 )
+                return normalize_reply(reply)
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
                 status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
                 transient = status is None or status == 429 or status >= 500
