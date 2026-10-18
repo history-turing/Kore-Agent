@@ -27,9 +27,12 @@ kore_next/
   tools/
     definitions.py        工具 schema
     catalog.py            能力分类、别名与有界检索
+    policies.py           只读并发与 program 可用工具策略
     projection.py         每个模型步骤的不可变工具可见性投影
     validation.py         工具参数 JSON Schema 校验
     errors.py             可回传模型的结构化工具错误
+    program.py            program 子进程协议、配额与只读嵌套调用
+    program_worker.py     受限 Python 执行器与 AST 白名单
     executor.py           工具预检、审批、派发、文件、Shell 与网络调用
     shell.py              Shell argv 构造
   services/
@@ -125,6 +128,8 @@ automation tick
 同一 Assistant Step 的多个只读工具会并发派发，结果按模型原始顺序组装回上下文；只要批次中出现写操作、人工审批、MCP 或桌面操作，整批按模型顺序串行执行。`ResourceAuthority` 在 Application 级别共享，用 canonical path 读写租约、Shell 工作区独占锁、桌面串行 Actor、MCP Server 与网络并发配额约束跨 Run 的真实资源竞争。
 
 并发批次只在结束后提交一次完整 checkpoint；批次执行期间，每个调用的 T1/T2 状态和 `tool_result` 事件已经独立落盘。恢复时根据 `tool_executions` 的 `completed_call_ids` 过滤已完成调用，而不是假设调用按索引连续完成；已经投影到上下文的 tool messages 会按模型原始请求顺序重排。
+
+`program` 是延迟激活的只读编排工具。模型提交一段短 Python 源程序，通过 `tools.call(name, arguments)` 调用当前已激活的只读工具，并把最终值赋给 `result`。父 Runtime 负责启动独立 worker、逐次执行参数校验与资源租约，并施加 32 次嵌套调用、源码 20KB、输出 200KB 和最长 30 秒的硬配额。worker 使用最小 builtin 集合、AST 白名单和禁止 dunder 属性访问；它运行在独立进程与最小环境中，但不是 OS 级沙箱，因此不应把不受信任的程序视为绝对安全边界。v1 的嵌套调用不单独写 `tool_executions`，事务边界由顶层 `program` 调用承担，`program` 结果中的 `call_log` 保留嵌套调用的审计摘要。
 
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
 

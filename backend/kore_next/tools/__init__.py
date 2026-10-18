@@ -3,6 +3,7 @@
 from .definitions import (
     CORE_TOOLS,
     PLAN_ALLOWED_TOOLS,
+    PROGRAM_DEFINITION,
     TOOL_CATALOG_DEFINITION,
     TOOLS,
     builtin_tool_definitions,
@@ -16,6 +17,7 @@ __all__ = [
     "ApprovalGate",
     "CORE_TOOLS",
     "PLAN_ALLOWED_TOOLS",
+    "PROGRAM_DEFINITION",
     "TOOLS",
     "TOOL_CATALOG_DEFINITION",
     "ToolArgumentError",

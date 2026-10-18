@@ -52,7 +52,7 @@ def test_empty_query_lists_inventory_without_activating(tmp_path):
     executor = _executor(tmp_path)
     result = executor.activate_tools("", "normal")
     categories = {item["category"] for item in result["inventory"]}
-    assert {"memory", "tasks", "automation"} <= categories
+    assert {"memory", "tasks", "automation", "orchestration"} <= categories
     assert result["activated"] == []
     assert result["matching_count"] > 0
 

@@ -343,6 +343,18 @@ TOOL_CATALOG_DEFINITION = _definition(
 )
 TOOLS.append(TOOL_CATALOG_DEFINITION)
 
+PROGRAM_DEFINITION = _definition(
+    "program",
+    "Run a short Python program that orchestrates already activated read-only tools. "
+    "Call tools.call(name, arguments) and assign the final value to result.",
+    {
+        "source": {"type": "string", "minLength": 1, "maxLength": 20_000},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 30},
+    },
+    ["source"],
+)
+TOOLS.append(PROGRAM_DEFINITION)
+
 
 def builtin_tool_definitions(mode: str = "normal", *, web_tools: bool = True) -> list[dict[str, Any]]:
     if mode != "plan":

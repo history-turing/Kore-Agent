@@ -28,6 +28,7 @@ _CATEGORY_ALIASES = {
     "automation": ("自动化", "定时", "automation", "cron"),
     "computer": ("电脑", "桌面", "computer", "gui"),
     "meta": ("工具目录", "能力", "catalog"),
+    "orchestration": ("编排", "批处理", "program", "code", "script"),
 }
 
 _TOOL_ALIASES = {
@@ -40,6 +41,7 @@ _TOOL_ALIASES = {
     "web_search": ("搜索", "联网搜索", "search"),
     "http_request": ("http 请求", "接口", "request"),
     "get_current_time": ("当前时间", "时间", "time"),
+    "program": ("编排", "批处理", "脚本", "program", "code"),
     "task_create": ("创建任务", "新建任务"),
     "task_update": ("更新任务", "任务进度"),
     "task_list": ("任务列表", "待办列表"),
@@ -58,6 +60,7 @@ _CATEGORY_TAGS = {
     "automation": ("automation", "schedule"),
     "computer": ("computer", "desktop", "gui"),
     "meta": ("catalog", "discovery"),
+    "orchestration": ("orchestration", "program", "batch"),
 }
 
 _CATEGORY_WORDS = {
@@ -93,6 +96,8 @@ def _category(name: str) -> str:
         return "automation"
     if name.startswith("computer_"):
         return "computer"
+    if name == "program":
+        return "orchestration"
     if name == "tool_catalog":
         return "meta"
     if name.startswith("mcp__"):

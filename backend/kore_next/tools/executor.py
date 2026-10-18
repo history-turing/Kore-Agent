@@ -30,6 +30,7 @@ from .errors import (
     ToolNotActive,
     ToolNotVisibleYet,
 )
+from .program import run_program
 from .projection import ToolProjection
 from .shell import shell_command_argv
 from .validation import validate_arguments
@@ -102,6 +103,7 @@ class PreparedToolCall:
     arguments: dict[str, Any]
     call_id: str
     mode: str
+    projection: ToolProjection
     path: Path | None = None
     effective_step: int | None = None
 
@@ -277,6 +279,7 @@ class ToolExecutor:
             arguments=arguments,
             call_id=call_id,
             mode=mode,
+            projection=projection,
             path=path,
             effective_step=effective_step,
         )
@@ -333,6 +336,13 @@ class ToolExecutor:
         arguments = prepared.arguments
         run_id = prepared.run_id
         mode = prepared.mode
+        if name == "program":
+            return await run_program(
+                self,
+                prepared,
+                str(arguments.get("source") or ""),
+                float(arguments.get("timeout_seconds") or 10),
+            )
         if name == "tool_catalog":
             return json.dumps(
                 self.activate_tools(

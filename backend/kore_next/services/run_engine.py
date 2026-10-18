@@ -23,6 +23,7 @@ from ..rpc import RpcFault
 from ..runtime_policy import RepeatedToolCallGuard, RunBudget, RuntimePolicyError
 from ..tasks import TaskService
 from ..tools import ToolError, ToolExecutor, ToolProjection
+from ..tools.policies import CONCURRENT_READ_TOOLS
 from ..util import dumps, now, uid
 from .approvals import ApprovalService
 from .artifacts import ArtifactService
@@ -50,29 +51,6 @@ class ToolCallOutcome:
     plan_task_id: str | None
     tool_message: dict[str, Any] | None
     result_event: dict[str, Any] | None
-
-
-CONCURRENT_READ_TOOLS = {
-    "read_file",
-    "list_files",
-    "get_current_time",
-    "web_search",
-    "history_search",
-    "history_read",
-    "session_search",
-    "memory_list",
-    "memory_read",
-    "task_get",
-    "task_list",
-    "skill_read",
-    "skill_resource_read",
-    "evidence_search",
-    "evidence_read",
-    "tool_result_inspect",
-    "tool_result_read",
-    "automation_list",
-    "automation_get",
-}
 
 
 class RunEngine:
