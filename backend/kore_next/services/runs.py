@@ -427,8 +427,15 @@ class RunStore:
     async def trace(self, params: dict[str, Any]) -> dict[str, Any]:
         settings = self._settings()
         run = (await self.get(params))["run"]
-        rows = await self.db.fetchall("SELECT data_json FROM events WHERE run_id=? ORDER BY sequence", (run["id"],))
-        events = [loads(r["data_json"], {}) for r in rows]
+        runtime_events = await self.runtime_event_store.list(run["id"], limit=20_000)
+        if runtime_events:
+            events = runtime_events
+        else:
+            rows = await self.db.fetchall(
+                "SELECT data_json FROM events WHERE run_id=? ORDER BY sequence",
+                (run["id"],),
+            )
+            events = [loads(r["data_json"], {}) for r in rows]
         usage_summary = summarize_run_usage(events, self.run_budget)
         usage = usage_summary["main_agent"]
         model_event = next(

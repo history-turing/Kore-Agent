@@ -73,6 +73,7 @@ def test_rpc_contract_contains_expected_methods(app):
         "run.get",
         "run.interrupt",
         "run.list",
+        "run.events",
         "run.recover",
         "skill.delete",
         "skill.install",

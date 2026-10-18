@@ -111,3 +111,13 @@ async def test_projections_build_messages_and_terminal_state(runtime_app):
     assert messages[1]["tool_calls"][0]["id"] == "call-1"
     assert messages[2]["tool_call_id"] == "call-1"
     assert classify_terminal(events)["status"] == "completed"
+
+
+async def test_run_events_returns_incremental_suffix(runtime_app):
+    app = runtime_app
+    _, run = await _new_run(app)
+    await app.runs.event(run, "user_message", message={"role": "user", "content": "hello"})
+    await app.runs.event(run, "assistant_message", step=1, message={"role": "assistant", "content": "world"})
+    result = await app.run_events({"run_id": run["id"], "after_seq": 1})
+    assert [event["type"] for event in result["events"]] == ["assistant_message"]
+    assert result["next_seq"] == 2

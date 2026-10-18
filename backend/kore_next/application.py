@@ -241,6 +241,7 @@ class Application:
             "run.cancel": self.run_cancel,
             "run.interrupt": self.run_interrupt,
             "run.recover": self.run_recover,
+            "run.events": self.run_events,
             "trace.get": self.trace_get,
             "automation.list": self.automation_list,
             "automation.get": self.automation_get,
@@ -278,6 +279,10 @@ class Application:
             "SELECT COUNT(*) AS n FROM permission_rules WHERE "
             "json_extract(matcher_json, '$.version') IS NULL OR json_extract(matcher_json, '$.version')!=2"
         )
+        runtime_events = await self.db.fetchone("SELECT COUNT(*) AS n FROM runtime_events")
+        offloads = await self.db.fetchone(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes),0) AS bytes FROM context_offloads"
+        )
         return {
             "name": "KoreAgent Next",
             "version": "0.1.0",
@@ -288,6 +293,11 @@ class Application:
             "platform": sys.platform,
             "rpc_methods": sorted(self.methods()),
             "legacy_permission_rules_needing_review": legacy_rules["n"] if legacy_rules else 0,
+            "runtime": {
+                "events": runtime_events["n"] if runtime_events else 0,
+                "offloaded_results": offloads["n"] if offloads else 0,
+                "offloaded_bytes": offloads["bytes"] if offloads else 0,
+            },
             "execution_capabilities": {
                 "workspace_sandbox": "macos-seatbelt" if sys.platform == "darwin" else "unavailable",
                 "shell_workspace": sys.platform == "darwin",
@@ -380,6 +390,17 @@ class Application:
 
     async def run_recover(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.runs.recover(params)
+
+    async def run_events(self, params: dict[str, Any]) -> dict[str, Any]:
+        run_id = str(required(params, "run_id"))
+        await self.runs.get({"run_id": run_id})
+        after_seq = max(0, int(params.get("after_seq", 0)))
+        limit = max(1, min(int(params.get("limit", 500)), 2_000))
+        events = await self.runs.runtime_events(run_id, after_seq=after_seq, limit=limit)
+        return {
+            "events": events,
+            "next_seq": int(events[-1]["event_seq"]) if events else after_seq,
+        }
 
     async def trace_get(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.runs.trace(params)

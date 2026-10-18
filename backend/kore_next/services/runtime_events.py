@@ -111,7 +111,7 @@ class RuntimeEventStore:
     async def list(self, run_id: str, *, after_seq: int = 0, limit: int = 500) -> list[dict[str, Any]]:
         rows = await self.db.fetchall(
             "SELECT * FROM runtime_events WHERE run_id=? AND event_seq>? ORDER BY event_seq LIMIT ?",
-            (run_id, max(0, after_seq), max(1, min(limit, 2_000))),
+            (run_id, max(0, after_seq), max(1, min(limit, 20_000))),
         )
         return [
             {

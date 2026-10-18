@@ -112,3 +112,5 @@ automation tick
 检查点现在同时记录 `through_event_seq` 和前缀 digest。恢复时先校验事件前缀，再只应用水位线之后的模型可见事件；恢复出的新 Run 拥有独立事件序列，继承的是物化状态而不是旧 Run 的序号。检查点与日志不一致时会拒绝自动恢复。
 
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
+
+前端和 Trace 通过 `run.events(after_seq, limit)` 增量读取 `runtime_events`；`trace.get` 也优先使用事件日志，旧 `events` 表只在历史 Run 没有迁移数据时回退。
