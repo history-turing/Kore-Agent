@@ -138,3 +138,32 @@ docker load -i image.tar
 失败案例：sympy-11618 的 Agent 选择了对不同维度抛 `ValueError`，而题目期望把缺失维度补 0 后计算 `sqrt(5)`。这说明当前 scaffold 能定位到正确代码，但语义判断仍会出错。
 
 这 5 条是“每个仓库的第一条”，存在明显选择偏差，不能外推成 Verified 500 的全量分数。要判断 harness 的真实水平，需要跑随机分层样本（例如 30–100 条）并统一步数预算。
+
+## 优化后复测（2026-10-18）
+
+后端拆分 `model/`、`tools/`、`services/` 后，用同一批 5 条加 7 条同环境组题目复测，统一 40 步预算：
+
+| 组 | 题数 | resolved（40 步） |
+|---|---:|---:|
+| 原 5 条 | 5 | 5 |
+| 同环境组扩展 | 7 | 0 |
+| 合计 | 12 | 5 |
+
+原 5 条全部通过，其中 `sympy__sympy-11618` 从之前的 `ValueError` 方案改为补零计算，已 resolved。
+
+对 7 条失败题用 60 步重跑后，`pytest-dev__pytest-10081` 转为 resolved。两轮取较优 patch 的汇总为：
+
+- **6/12 resolved（50%）**
+- 非空 patch 中 **6/10 resolved（60%）**
+- 2 条空 patch：`astropy__astropy-13033`、`pytest-dev__pytest-10356`
+- 4 条有 patch 但未通过：`sympy__sympy-12096`、`12419`、`12481`、`12489`
+
+失败题大多已经定位到正确代码，最终消息明确写了“run budget closed”或“未完成验证”，说明当前主要瓶颈是探索效率与步数预算，而不是完全找不到问题。60 步重跑也会出现结果波动（部分题反而变空），因此这不是稳定的单轮排行榜分数。
+
+产物：
+
+- `backend/.koreagent-next/bench/exp03-results/predictions-best.json`
+- `backend/.koreagent-next/bench/exp03-results/eval-best/`
+- 各组原始运行目录：`exp03-astropy`、`exp03-pytest`、`exp03-sympy`、`exp03-requests`、`exp03-flask`
+
+说明：扩展题使用同一 `environment_setup_commit` 的 seed 镜像并在宿主侧 fetch base commit，评估时把 seed 镜像重新 tag 成目标 instance 的镜像名；这是为了绕开镜像下载限速，环境版本一致，但不是官方逐题构建镜像。

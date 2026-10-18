@@ -33,6 +33,16 @@ class BudgetDecision:
 
 
 @dataclass(frozen=True)
+class BudgetPhase:
+    """A coarse execution phase used to steer the model before it runs out."""
+
+    name: str
+    progress: float
+    model_calls_remaining: int
+    instruction: str
+
+
+@dataclass(frozen=True)
 class RunBudgetConfig:
     warning_tokens: int = 80_000
     finalization_tokens: int = 100_000
@@ -64,6 +74,41 @@ class RunBudget:
             reason = "tokens" if tokens >= self.config.warning_tokens else "model_calls"
             return BudgetDecision("warning", reason, tokens, model_calls)
         return BudgetDecision("normal", None, tokens, model_calls)
+
+    def phase(self, usage: dict[str, int], model_calls: int) -> BudgetPhase:
+        tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+        token_progress = tokens / max(1, self.config.hard_tokens)
+        call_progress = model_calls / max(1, self.config.hard_model_calls)
+        progress = min(1.0, max(token_progress, call_progress))
+        remaining = max(0, self.config.hard_model_calls - model_calls)
+        if progress >= 0.9:
+            name = "finalize"
+            instruction = (
+                "Budget phase: finalize. Return the best truthful final answer now. "
+                "Do not call tools; state any incomplete work explicitly."
+            )
+        elif progress >= 0.7:
+            name = "verify"
+            instruction = (
+                f"Budget phase: verify ({remaining} model calls left). "
+                "Run one targeted test or reproduction for the changed area, then return the best verified patch."
+            )
+        elif progress >= 0.4:
+            name = "implement"
+            instruction = (
+                f"Budget phase: implement ({remaining} model calls left). "
+                "Write the smallest plausible patch now. Use targeted reads and "
+                "avoid broad searches or full test suites."
+            )
+        else:
+            name = "explore"
+            instruction = (
+                f"Budget phase: explore ({remaining} model calls left). "
+                "Locate the relevant code with targeted searches and begin the "
+                "smallest patch by about 40% of the budget. Avoid full test suites "
+                "and whole-repository scans."
+            )
+        return BudgetPhase(name, round(progress, 3), remaining, instruction)
 
     def event_fields(self, decision: BudgetDecision) -> dict[str, Any]:
         return {

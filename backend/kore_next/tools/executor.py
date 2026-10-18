@@ -26,10 +26,12 @@ from .definitions import CORE_TOOLS, PLAN_ALLOWED_TOOLS, builtin_tool_definition
 from .errors import (
     ToolArgumentError,
     ToolDenied,
+    ToolError,
     ToolForbidden,
     ToolNotActive,
     ToolNotVisibleYet,
 )
+from .policies import shell_policy_violation
 from .program import run_program
 from .projection import ToolProjection
 from .shell import shell_command_argv
@@ -392,8 +394,14 @@ class ToolExecutor:
             command = str(arguments.get("command", ""))
             if not command.strip():
                 return "Empty command"
+            if self.settings.benchmark_mode:
+                violation = shell_policy_violation(command)
+                if violation:
+                    raise ToolError(violation, code="benchmark_policy", retryable=True)
             argv = shell_command_argv(self.settings, command)
             timeout = min(max(int(arguments.get("timeout_seconds", 120)), 1), 1800)
+            if self.settings.benchmark_mode:
+                timeout = min(timeout, max(1, int(self.settings.benchmark_shell_timeout)))
             result = await self.sandbox.run(
                 argv[0],
                 argv[1:],
@@ -402,7 +410,12 @@ class ToolExecutor:
                 network=self.settings.shell_network,
             )
             output = result.stdout + (f"\n[stderr]\n{result.stderr}" if result.stderr else "")
-            return f"exit_code={result.returncode}\n{output[-40_000:]}"
+            output_limit = (
+                max(1000, self.settings.benchmark_shell_output_limit)
+                if self.settings.benchmark_mode
+                else 40_000
+            )
+            return f"exit_code={result.returncode}\n{output[-output_limit:]}"
         if name == "get_current_time":
             timezone = str(arguments.get("timezone") or "UTC")
             try:

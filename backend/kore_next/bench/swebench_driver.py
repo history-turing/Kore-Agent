@@ -414,6 +414,65 @@ def _write_json(path: Path, data: Any) -> None:
     temporary.replace(path)
 
 
+def _event_summary(path: Path) -> dict[str, Any]:
+    """Extract benchmark diagnostics from the recorded run events."""
+    model_calls = 0
+    tool_calls = 0
+    blocked_tool_calls = 0
+    tool_seconds = 0.0
+    tokens = 0
+    last_step = 0
+    first_edit_step: int | None = None
+    final_message = ""
+    if not path.is_file():
+        return {
+            "model_calls": 0,
+            "tool_calls": 0,
+            "blocked_tool_calls": 0,
+            "tool_seconds": 0.0,
+            "tokens": 0,
+            "steps": 0,
+            "first_edit_step": None,
+            "final_message": "",
+        }
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line).get("params") or {}
+        except json.JSONDecodeError:
+            continue
+        kind = event.get("type")
+        step = event.get("step")
+        if isinstance(step, int):
+            last_step = max(last_step, step)
+        if kind == "model_request":
+            model_calls += 1
+        elif kind == "tool_call":
+            tool_calls += 1
+        elif kind == "tool_result":
+            result = event.get("tool_result") or {}
+            tool_seconds += float(result.get("duration_ms") or 0) / 1000
+            error = str(result.get("error") or "")
+            if "benchmark mode" in error.lower() or "benchmark_policy" in error.lower():
+                blocked_tool_calls += 1
+        elif kind == "first_edit" and first_edit_step is None:
+            first_edit_step = event.get("step")
+        elif kind == "agent_completed":
+            final_message = str((event.get("message") or {}).get("content") or "")
+        usage = event.get("usage")
+        if isinstance(usage, dict) and usage.get("total_tokens"):
+            tokens = int(usage["total_tokens"])
+    return {
+        "model_calls": model_calls,
+        "tool_calls": tool_calls,
+        "blocked_tool_calls": blocked_tool_calls,
+        "tool_seconds": round(tool_seconds, 1),
+        "tokens": tokens,
+        "steps": last_step,
+        "first_edit_step": first_edit_step,
+        "final_message": final_message[:2000],
+    }
+
+
 async def run_agent(
     row: dict[str, Any],
     *,
@@ -453,6 +512,7 @@ async def run_agent(
 
     app.broadcast = record
     run_id: str | None = None
+    run_record: dict[str, Any] = {}
     status = "completed"
     error: str | None = None
     started = time.monotonic()
@@ -476,18 +536,23 @@ async def run_agent(
         usage: dict[str, Any] = {}
         if run_id:
             try:
-                usage = dict((await app.run_get({"run_id": run_id}))["run"].get("usage") or {})
+                run_record = (await app.run_get({"run_id": run_id}))["run"]
+                usage = dict(run_record.get("usage") or {})
             except Exception:  # noqa: BLE001
                 usage = {}
         await app.close()
         # Let aiosqlite worker threads observe the close before the loop ends.
         await asyncio.sleep(0.2)
         stream.close()
+    diagnostics = _event_summary(events_path)
     return {
         "status": status,
         "error": error,
         "run_id": run_id,
+        "stop_reason": run_record.get("stop_reason"),
         "usage": usage,
+        **diagnostics,
+        "steps": run_record.get("steps") or diagnostics.get("steps"),
         "duration_seconds": round(time.monotonic() - started, 1),
     }
 
@@ -556,6 +621,17 @@ def run_instance(
     if not patch.strip():
         result["status"] = "empty_patch"
         result["error"] = (result.get("error") or "") + " | empty patch"
+    stop_reason = str(result.get("stop_reason") or "")
+    if not patch.strip():
+        result["failure_class"] = "empty_patch"
+    elif stop_reason in {"run_budget", "max_steps"}:
+        result["failure_class"] = "budget_exhausted"
+    elif result.get("status") == "timeout":
+        result["failure_class"] = "timeout"
+    elif result.get("status") != "completed":
+        result["failure_class"] = "run_error"
+    else:
+        result["failure_class"] = "patch_generated"
     patch_path.parent.mkdir(parents=True, exist_ok=True)
     patch_path.write_text(patch, encoding="utf-8", newline="\n")
     result["patch_path"] = str(patch_path)
@@ -585,6 +661,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--provider")
     parser.add_argument("--base-url")
     parser.add_argument("--max-steps", type=int, default=40)
+    parser.add_argument("--shell-timeout-cap", type=float, default=120)
+    parser.add_argument("--shell-output-limit", type=int, default=12000)
     parser.add_argument("--timeout", type=float, default=1800, help="Per-instance agent timeout in seconds")
     parser.add_argument(
         "--container-network",
@@ -641,12 +719,15 @@ def main(argv: list[str] | None = None) -> None:
             "Save one in KoreAgent settings or set KORENEXT_<PROVIDER>_API_KEY."
         )
     steps = max(args.max_steps, 4)
-    warning_calls = max(2, int(steps * 0.6))
-    finalization_calls = max(warning_calls + 1, int(steps * 0.8))
+    warning_calls = max(2, int(steps * 0.5))
+    finalization_calls = max(warning_calls + 1, int(steps * 0.9))
     hard_calls = max(finalization_calls + 1, steps)
     settings = replace(
         settings,
         docker_command=shlex.join(docker.prefix),
+        benchmark_mode=True,
+        benchmark_shell_timeout=args.shell_timeout_cap,
+        benchmark_shell_output_limit=args.shell_output_limit,
         max_steps=steps,
         run_warning_model_calls=warning_calls,
         run_finalization_model_calls=finalization_calls,

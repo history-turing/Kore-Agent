@@ -1,5 +1,6 @@
 """Tool capability policies shared by batching and program orchestration."""
 
+import re
 from dataclasses import dataclass
 
 CONCURRENT_READ_TOOLS = {
@@ -81,3 +82,78 @@ def tool_policy(name: str, arguments: dict | None = None) -> ToolPolicy:
     if name.startswith("computer_") or name.startswith("mcp__"):
         return _EXTERNAL
     return _EXTERNAL
+
+
+_BROAD_COMMANDS = (
+    (
+        re.compile(r"\bgit\s+cat-file\s+--batch-all-objects\b"),
+        "Scanning every git object is too broad. Search source files with `rg -n \"symbol\" path/`.",
+    ),
+    (
+        re.compile(r"(?:^|[;&|]\s*)find\s+/\s"),
+        "Scanning the whole filesystem is too broad. Search a specific source directory.",
+    ),
+    (
+        re.compile(r"(?:^|[;&|]\s*)grep\s+-[A-Za-z]*r[A-Za-z]*\s+/\s"),
+        "Use `rg -n` on a specific source directory instead of a filesystem-wide grep.",
+    ),
+    (
+        re.compile(r"(?:^|[;&|]\s*)du\s+-[A-Za-z]*s[A-Za-z]*\s+/\s"),
+        "Do not scan the whole filesystem for disk usage.",
+    ),
+)
+
+_PYTEST_COMMAND = re.compile(r"(?:^|[;&|]\s*)(?:python(?:3(?:\.\d+)?)?\s+-m\s+)?pytest\b")
+_PATH_WITH_SLASH = re.compile(r"(?:^|\s)(?:\./)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def _is_full_test_suite(command: str) -> bool:
+    """Detect pytest invocations that would collect an entire repository."""
+    if not _PYTEST_COMMAND.search(command):
+        return False
+    if ".py" in command or "::" in command or "--pyargs" in command:
+        return False
+    if "--version" in command or "--help" in command:
+        return False
+    if re.search(r"(?:^|\s)-k(?:\s+|=)", command):
+        return False
+    # A directory with a slash (e.g. astropy/modeling/tests) is targeted enough.
+    return not _PATH_WITH_SLASH.search(command)
+
+
+def shell_policy_violation(command: str) -> str | None:
+    """Return a benchmark-mode rejection message for a wasteful shell command."""
+    for pattern, message in _BROAD_COMMANDS:
+        if pattern.search(command):
+            return message
+    if _is_full_test_suite(command):
+        return (
+            "Full test-suite runs are blocked in benchmark mode. "
+            "Run one targeted test file or node id, for example "
+            "`python -m pytest path/to/test_file.py -q`."
+        )
+    return None
+
+
+_MUTATING_SHELL_PATTERNS = (
+    re.compile(r"\bsed\s+-[A-Za-z]*i"),
+    re.compile(r"\bperl\s+-[A-Za-z]*i"),
+    re.compile(r"(?:^|[^0-9&])>{1,2}(?!&|/dev/null)"),
+    re.compile(r"\btee\s+"),
+    re.compile(r"\bgit\s+apply\b"),
+    re.compile(r"\bpatch\s+-p"),
+    re.compile(r"\bpython\d*\s+-[^\n]*<<.*\bopen\s*\(", re.S),
+    re.compile(r"\bpython\d*\s+-c\s+.*\bwrite_text\b", re.S),
+)
+
+
+def is_mutating_shell_command(command: str) -> bool:
+    return any(pattern.search(command) for pattern in _MUTATING_SHELL_PATTERNS)
+
+
+def is_mutating_tool(name: str, arguments: dict | None = None) -> bool:
+    if name == "write_file":
+        return True
+    if name == "shell" and isinstance(arguments, dict):
+        return is_mutating_shell_command(str(arguments.get("command") or ""))
+    return False

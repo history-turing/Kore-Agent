@@ -41,6 +41,9 @@ class Settings:
     shell_bootstrap: str = os.getenv("KORENEXT_SHELL_BOOTSTRAP", "")
     auto_approve: bool = os.getenv("KORENEXT_AUTO_APPROVE", "false").lower() == "true"
     web_tools_enabled: bool = os.getenv("KORENEXT_WEB_TOOLS_ENABLED", "true").lower() == "true"
+    benchmark_mode: bool = os.getenv("KORENEXT_BENCHMARK_MODE", "false").lower() == "true"
+    benchmark_shell_timeout: float = float(os.getenv("KORENEXT_BENCHMARK_SHELL_TIMEOUT", "120"))
+    benchmark_shell_output_limit: int = int(os.getenv("KORENEXT_BENCHMARK_SHELL_OUTPUT_LIMIT", "12000"))
     max_steps: int = int(os.getenv("KORENEXT_MAX_STEPS", "12"))
     run_warning_tokens: int = int(os.getenv("KORENEXT_RUN_WARNING_TOKENS", "80000"))
     run_finalization_tokens: int = int(os.getenv("KORENEXT_RUN_FINALIZATION_TOKENS", "100000"))

@@ -23,7 +23,7 @@ from ..rpc import RpcFault
 from ..runtime_policy import RepeatedToolCallGuard, RunBudget, RuntimePolicyError
 from ..tasks import TaskService
 from ..tools import ToolError, ToolExecutor, ToolProjection
-from ..tools.policies import CONCURRENT_READ_TOOLS, tool_policy
+from ..tools.policies import CONCURRENT_READ_TOOLS, is_mutating_tool, tool_policy
 from ..util import dumps, now, uid
 from .approvals import ApprovalService
 from .artifacts import ArtifactService
@@ -234,6 +234,7 @@ class RunEngine:
                 start_step = resume_step + 1
             budget_warning_emitted = False
             repeated_calls = RepeatedToolCallGuard()
+            first_edit_step: int | None = None
             for steps in range(start_step, settings.max_steps + 1):
                 # Check before each request and again after usage arrives; a model
                 # response can cross the limit even when the request was allowed.
@@ -277,6 +278,7 @@ class RunEngine:
                         usage=None,
                         **self.run_budget.event_fields(budget_decision),
                     )
+                phase = self.run_budget.phase(total, model_calls)
                 projection = tools.project(steps, run["mode"])
                 base_tools, extra_tools = list(projection.base), list(projection.extra)
                 if force_final:
@@ -286,25 +288,24 @@ class RunEngine:
                 tool_schema_tokens = (
                     estimator.count_text(dumps([*base_tools, *extra_tools])) if base_tools or extra_tools else 0
                 )
-                final_instruction = {
-                    "role": "system",
-                    "content": (
-                        "The run budget is closing. Return the best truthful final answer now. "
-                        "Do not call tools. State incomplete work explicitly."
-                    ),
-                }
+                guidance_content = phase.instruction
+                if phase.name == "implement" and first_edit_step is None:
+                    guidance_content += (
+                        " No repository edit has been detected yet; write the smallest plausible patch now."
+                    )
+                guidance = {"role": "system", "content": guidance_content}
                 step_context = await self.context.prepare_step(
                     messages=model_messages,
                     provider=str(model_config.get("provider") or settings.provider),
                     model=str(model_config.get("model") or settings.model),
                     tool_schema_tokens=tool_schema_tokens
-                    + (estimator.count_message(final_instruction) if force_final else 0),
+                    + estimator.count_message(guidance),
                     summarizer=lambda source, previous: self.post_processor.summarize_context(
                         source, previous, run=run
                     ),
                 )
                 model_messages = step_context.messages
-                request_messages = [*model_messages, final_instruction] if force_final else model_messages
+                request_messages = [*model_messages, guidance]
                 system_tokens = sum(
                     estimator.count_message(item) for item in request_messages if item.get("role") == "system"
                 )
@@ -472,6 +473,24 @@ class RunEngine:
                     await self.runs.broadcast_event(assistant_event)
                     break
                 repeated_calls.observe(reply.tool_calls)
+                if first_edit_step is None and any(
+                    is_mutating_tool(
+                        str(call.get("name") or ""),
+                        call.get("arguments") if isinstance(call.get("arguments"), dict) else {},
+                    )
+                    for call in reply.tool_calls
+                ):
+                    first_edit_step = steps
+                    run["first_edit_step"] = steps
+                    await self.runs.event(
+                        run,
+                        "first_edit",
+                        step=steps,
+                        message=None,
+                        tool_call=None,
+                        tool_result=None,
+                        usage=None,
+                    )
                 async with self.runs.transaction() as conn:
                     await self.conversations.add_message(run["conversation_id"], assistant, conn=conn)
                     assistant_event = await self.runs.event(
@@ -591,6 +610,7 @@ class RunEngine:
             "messages": [],
             "steps": steps,
             "stop_reason": "completed",
+            "first_edit_step": run.get("first_edit_step"),
             "usage": total,
             "error": None,
             "plan_task_id": plan_task_id,
