@@ -298,8 +298,7 @@ class RunEngine:
                     messages=model_messages,
                     provider=str(model_config.get("provider") or settings.provider),
                     model=str(model_config.get("model") or settings.model),
-                    tool_schema_tokens=tool_schema_tokens
-                    + estimator.count_message(guidance),
+                    tool_schema_tokens=tool_schema_tokens + estimator.count_message(guidance),
                     summarizer=lambda source, previous: self.post_processor.summarize_context(
                         source, previous, run=run
                     ),
@@ -1024,7 +1023,7 @@ class RunEngine:
                 pass
         tool_message = {
             "role": "tool",
-            "content": model_output or error,
+            "content": model_output or error or "Tool completed with no output.",
             "name": name,
             "tool_call_id": call_id,
         }

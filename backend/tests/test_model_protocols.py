@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
 from kore_next.config import Settings
 from kore_next.model import ModelClient
@@ -219,3 +220,36 @@ async def test_missing_key_returns_setup_message_without_request(monkeypatch):
 
     assert reply.tool_calls == []
     assert "模型尚未配置" in (reply.content or "")
+
+
+async def test_streaming_http_error_preserves_provider_body(monkeypatch):
+    import kore_next.model.openai_chat as protocol
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "error": {
+                    "message": "messages[1]: content should be a string or a list",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+    _mock_client(monkeypatch, protocol, handler)
+    settings = Settings(provider="deepseek", model="deepseek-test", base_url="https://api.deepseek.com", api_key="key")
+    client = ModelClient(
+        settings,
+        {
+            "provider": "deepseek",
+            "model": "deepseek-test",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "key",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match=r"HTTP 422.*content should be a string"):
+        await client.complete(
+            [{"role": "user", "content": "hi"}],
+            on_text_delta=lambda _delta: None,
+        )

@@ -107,7 +107,13 @@ async def stream_responses(
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={**body, "stream": True},
         ) as response:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                # Preserve provider error details instead of surfacing the
+                # httpx ResponseNotRead exception raised by response.text.
+                await response.aread()
+                raise
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue

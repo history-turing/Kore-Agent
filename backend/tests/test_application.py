@@ -170,6 +170,39 @@ async def test_model_requests_are_durable_and_tool_activation_survives_checkpoin
     assert requests[1]["request"]["messages"] == calls[1][0]
 
 
+async def test_empty_tool_output_is_sent_to_model_as_non_empty_content(app, monkeypatch):
+    conversation = (await app.conversation_create({}))["conversation"]
+    await app.conversations.add_message(conversation["id"], {"role": "user", "content": "List files"})
+    run = await app.runs.create(conversation["id"], "List files", "normal")
+    calls = []
+
+    async def fake_complete(_self, messages, extra_tools, base_tools, **_kwargs):
+        calls.append(deepcopy(messages))
+        if len(calls) == 1:
+            return ModelReply(
+                content="",
+                reasoning=None,
+                tool_calls=[{"id": "list-empty", "name": "list_files", "arguments": {"path": "."}}],
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+        return ModelReply(
+            content="Workspace is empty",
+            reasoning=None,
+            tool_calls=[],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    async def no_post_run(*_args):
+        return None
+
+    monkeypatch.setattr("kore_next.application.ModelClient.complete", fake_complete)
+    monkeypatch.setattr(app.run_post_processor, "run", no_post_run)
+    await app._execute_run(run)
+
+    tool_message = next(message for message in calls[1] if message.get("role") == "tool")
+    assert tool_message["content"] == "Tool completed with no output."
+
+
 async def test_model_test_never_sends_saved_key_to_custom_endpoint(app, monkeypatch):
     async def unexpected_complete(*_args, **_kwargs):
         pytest.fail("custom endpoint received saved key")

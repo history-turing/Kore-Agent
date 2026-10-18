@@ -94,7 +94,13 @@ async def stream_chat(
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=request_body,
         ) as response:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                # Streaming responses are lazy. Consume the error body before
+                # the shared model error formatter reads response.text.
+                await response.aread()
+                raise
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
                     continue
