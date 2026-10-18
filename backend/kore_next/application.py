@@ -191,6 +191,7 @@ class Application:
 
     async def start(self) -> None:
         await self.db.initialize()
+        await self.runs.recover_stale_runs()
         await self.skill_service.migrate_user_skills()
         await self.skill_learning.scan_completed_runs(existing_skills=await self.skill_service.skills(), limit=100)
         mcp = await self.mcp_settings.mcp()
@@ -337,8 +338,9 @@ class Application:
         if mode not in {"normal", "plan"}:
             raise RpcFault(-32602, "mode must be normal or plan")
         await self.conversations.require(cid)
-        await self.conversations.add_message(cid, {"role": "user", "content": content})
-        run = await self.runs.create(cid, content, mode)
+        async with self.runs.transaction() as conn:
+            await self.conversations.add_message(cid, {"role": "user", "content": content}, conn=conn)
+            run = await self.runs.create(cid, content, mode, conn=conn)
         task = asyncio.create_task(self._execute_run(run))
         self.running[run["id"]] = task
         try:

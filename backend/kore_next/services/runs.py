@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
@@ -39,9 +40,14 @@ class SqlExecutor(Protocol):
     async def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> Any: ...
 
 
-async def insert_run(db: SqlExecutor, run: dict[str, Any]) -> None:
+async def insert_run(db: SqlExecutor, run: dict[str, Any], conn: Any | None = None) -> None:
     placeholders = ",".join("?" for _ in RUN_FIELDS)
-    await db.execute(f"INSERT INTO runs VALUES({placeholders})", tuple(run[field] for field in RUN_FIELDS))
+    sql = f"INSERT INTO runs VALUES({placeholders})"
+    args = tuple(run[field] for field in RUN_FIELDS)
+    if conn is None:
+        await db.execute(sql, args)
+    else:
+        await db.execute_on(conn, sql, args)
 
 
 class RunStore:
@@ -66,7 +72,12 @@ class RunStore:
         self.running = running
         self.execute_run = execute_run
 
-    async def create(self, cid: str | None, text: str, mode: str, **extra: Any) -> dict[str, Any]:
+    def transaction(self) -> Any:
+        return self.db.transaction()
+
+    async def create(
+        self, cid: str | None, text: str, mode: str, *, conn: Any | None = None, **extra: Any
+    ) -> dict[str, Any]:
         stamp, rid = now(), uid()
         run = {
             "id": rid,
@@ -86,32 +97,47 @@ class RunStore:
             "triggered_at": extra.get("triggered_at"),
             "mode": mode,
         }
-        await insert_run(self.db, run)
+        await insert_run(self.db, run, conn)
         return run
 
-    async def save(self, run: dict[str, Any]) -> None:
-        await self.db.execute(
-            "UPDATE runs SET status=?,started_at=?,updated_at=?,completed_at=?,error=?,stop_reason=? WHERE id=?",
-            (
-                run["status"],
-                run["started_at"],
-                run["updated_at"],
-                run["completed_at"],
-                run["error"],
-                run["stop_reason"],
-                run["id"],
-            ),
+    async def save(self, run: dict[str, Any], *, conn: Any | None = None) -> None:
+        sql = "UPDATE runs SET status=?,started_at=?,updated_at=?,completed_at=?,error=?,stop_reason=? WHERE id=?"
+        args = (
+            run["status"],
+            run["started_at"],
+            run["updated_at"],
+            run["completed_at"],
+            run["error"],
+            run["stop_reason"],
+            run["id"],
         )
+        if conn is None:
+            await self.db.execute(sql, args)
+        else:
+            await self.db.execute_on(conn, sql, args)
         if run.get("source") == "automation":
-            await self.db.execute(
-                "UPDATE automation_occurrences SET state=? WHERE run_id=?",
-                (run["status"], run["id"]),
-            )
+            occurrence_sql = "UPDATE automation_occurrences SET state=? WHERE run_id=?"
+            if conn is None:
+                await self.db.execute(occurrence_sql, (run["status"], run["id"]))
+            else:
+                await self.db.execute_on(conn, occurrence_sql, (run["status"], run["id"]))
         await self._broadcast()("run.status", {"run_id": run["id"], "status": run["status"]})
 
-    async def event(self, run: dict[str, Any], kind: str, **data: Any) -> dict[str, Any]:
+    async def event(self, run: dict[str, Any], kind: str, *, conn: Any | None = None, **data: Any) -> dict[str, Any]:
+        if conn is not None:
+            return await self._event_on(conn, run, kind, **data)
+        async with self.db.transaction() as transaction:
+            event = await self._event_on(transaction, run, kind, **data)
+        await self.broadcast_event(event)
+        return event
+
+    async def _event_on(self, conn: Any, run: dict[str, Any], kind: str, **data: Any) -> dict[str, Any]:
         settings = self._settings()
-        row = await self.db.fetchone("SELECT COALESCE(MAX(sequence),0)+1 AS n FROM events WHERE run_id=?", (run["id"],))
+        row = await self.db.fetchone_on(
+            conn,
+            "SELECT COALESCE(MAX(sequence),0)+1 AS n FROM events WHERE run_id=?",
+            (run["id"],),
+        )
         event = {
             "event_id": uid(),
             "run_id": run["id"],
@@ -124,7 +150,8 @@ class RunStore:
             "model": settings.model,
             **data,
         }
-        await self.db.execute(
+        await self.db.execute_on(
+            conn,
             "INSERT INTO events VALUES(?,?,?,?,?,?)",
             (
                 event["event_id"],
@@ -135,12 +162,88 @@ class RunStore:
                 dumps(event),
             ),
         )
+        return event
+
+    async def broadcast_event(self, event: dict[str, Any]) -> None:
         # Keep the full model request in the durable log without flooding the UI.
+        kind = str(event.get("type") or "")
         broadcast_event = (
             {key: value for key, value in event.items() if key != "request"} if kind == "model_request" else event
         )
         await self._broadcast()("agent.event", broadcast_event)
-        return event
+
+    async def begin_tool(self, run: dict[str, Any], call: dict[str, Any], step: int) -> dict[str, Any]:
+        """Persist the dispatch boundary before a tool can cause side effects."""
+        arguments_hash = hashlib.sha256(dumps(call.get("arguments") or {}).encode("utf-8")).hexdigest()
+        async with self.db.transaction() as conn:
+            await self.db.execute_on(
+                conn,
+                "INSERT OR IGNORE INTO tool_executions("
+                "run_id,call_id,step,tool_name,arguments_hash,status,started_at"
+                ") VALUES(?,?,?,?,?,'dispatched',?)",
+                (
+                    run["id"],
+                    call["id"],
+                    step,
+                    call["name"],
+                    arguments_hash,
+                    now(),
+                ),
+            )
+            row = await self.db.fetchone_on(
+                conn,
+                "SELECT * FROM tool_executions WHERE run_id=? AND call_id=?",
+                (run["id"], call["id"]),
+            )
+        return dict(row) if row else {}
+
+    async def finish_tool(
+        self,
+        conn: Any,
+        run_id: str,
+        call_id: str,
+        *,
+        success: bool,
+        output: str,
+        error: str | None,
+    ) -> None:
+        await self.db.execute_on(
+            conn,
+            "UPDATE tool_executions SET status=?,output_hash=?,error=?,finished_at=? WHERE run_id=? AND call_id=?",
+            (
+                "succeeded" if success else "failed",
+                hashlib.sha256(output.encode("utf-8")).hexdigest(),
+                error,
+                now(),
+                run_id,
+                call_id,
+            ),
+        )
+
+    async def tool_executions(self, run_id: str, *, step: int | None = None) -> dict[str, dict[str, Any]]:
+        sql = "SELECT * FROM tool_executions WHERE run_id=?"
+        values: list[Any] = [run_id]
+        if step is not None:
+            sql += " AND step=?"
+            values.append(step)
+        rows = await self.db.fetchall(sql, tuple(values))
+        return {str(row["call_id"]): dict(row) for row in rows}
+
+    async def recover_stale_runs(self) -> int:
+        """Mark runs left behind by a previous host process as interrupted."""
+        rows = await self.db.fetchall("SELECT id FROM runs WHERE status='running'")
+        if not rows:
+            return 0
+        stamp = now()
+        await self.db.execute(
+            "UPDATE runs SET status='interrupted',stop_reason='host_restart',updated_at=? WHERE status='running'",
+            (stamp,),
+        )
+        await self.db.execute(
+            "UPDATE automation_occurrences SET state='interrupted' WHERE run_id IN "
+            "(SELECT id FROM runs WHERE status='interrupted' AND stop_reason='host_restart')"
+        )
+        return len(rows)
 
     async def list(self, params: dict[str, Any]) -> dict[str, Any]:
         clauses, values = [], []
@@ -188,20 +291,75 @@ class RunStore:
         checkpoint = await self.checkpoints.get(old["id"])
         if checkpoint is None:
             raise RpcFault(-32001, "Run has no recoverable checkpoint")
+        active = await self.db.fetchone(
+            "SELECT id FROM runs WHERE recovered_from_run_id=? AND status IN ('pending','running') LIMIT 1",
+            (old["id"],),
+        )
+        if active:
+            raise RpcFault(-32001, "Run recovery is already in progress", {"run_id": active["id"]})
+        state = dict(checkpoint["state"])
+        state["recovered_from_run_id"] = old["id"]
+        phase = str(state.get("phase") or "model_pending")
+        if phase == "tool_unknown":
+            raise self._unknown_tool_fault(old["id"], state)
+        if phase == "blocked":
+            raise RpcFault(-32001, "Run stopped by runtime policy and cannot be resumed")
+        if phase in {"assistant_ready", "tools_running"}:
+            pending = list(state.get("pending_tool_calls") or [])
+            step = int(state.get("next_step") or 1)
+            executions = await self.tool_executions(old["id"], step=step)
+            cursor = int(state.get("tool_cursor") or 0)
+            for execution in executions.values():
+                if execution["status"] in {"dispatched", "unknown"}:
+                    await self._mark_tool_unknown(old, execution["call_id"])
+                    raise self._unknown_tool_fault(old["id"], {"tool_call_id": execution["call_id"]})
+            for index, call in enumerate(pending):
+                execution = executions.get(str(call.get("id")))
+                if execution and execution["status"] in {"succeeded", "failed"}:
+                    cursor = max(cursor, index + 1)
+            state["tool_cursor"] = cursor
         run = await self.create(
             old["conversation_id"],
             old["user_message"],
             old["mode"],
             recovered_from_run_id=old["id"],
+            source=old.get("source"),
+            source_id=old.get("source_id"),
+            scheduled_for=old.get("scheduled_for"),
+            triggered_at=old.get("triggered_at"),
         )
-        await self.checkpoints.clone(old["id"], run["id"])
-        task = asyncio.create_task(self.execute_run(run, checkpoint["state"]))
+        await self.checkpoints.save(
+            run_id=run["id"],
+            conversation_id=checkpoint["conversation_id"],
+            sequence=checkpoint["sequence"],
+            state=state,
+        )
+        task = asyncio.create_task(self.execute_run(run, state))
         self.running[run["id"]] = task
         try:
             result = await task
         finally:
             self.running.pop(run["id"], None)
         return {"recovered_from_run_id": old["id"], "run": run, "result": result}
+
+    async def _mark_tool_unknown(self, run: dict[str, Any], call_id: Any) -> None:
+        await self.db.execute(
+            "UPDATE runs SET status='interrupted',stop_reason='tool_unknown',updated_at=? WHERE id=?",
+            (now(), run["id"]),
+        )
+        if call_id:
+            await self.db.execute(
+                "UPDATE tool_executions SET status='unknown',finished_at=? WHERE run_id=? AND call_id=?",
+                (now(), run["id"], str(call_id)),
+            )
+
+    @staticmethod
+    def _unknown_tool_fault(run_id: str, details: dict[str, Any]) -> RpcFault:
+        return RpcFault(
+            -32002,
+            "Tool outcome is unknown; manual reconciliation is required",
+            {"run_id": run_id, **details},
+        )
 
     async def trace(self, params: dict[str, Any]) -> dict[str, Any]:
         settings = self._settings()

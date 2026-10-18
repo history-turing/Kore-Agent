@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS events(
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL,
  event_time TEXT NOT NULL, data_json TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_events_run_sequence ON events(run_id, sequence);
+CREATE TABLE IF NOT EXISTS tool_executions(
+ run_id TEXT NOT NULL, call_id TEXT NOT NULL, step INTEGER NOT NULL, tool_name TEXT NOT NULL,
+ arguments_hash TEXT NOT NULL, status TEXT NOT NULL, output_hash TEXT, error TEXT,
+ started_at TEXT NOT NULL, finished_at TEXT,
+ PRIMARY KEY(run_id, call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_executions_status ON tool_executions(status, started_at);
 CREATE TABLE IF NOT EXISTS tasks(
  id TEXT PRIMARY KEY, data_json TEXT NOT NULL, updated_at TEXT NOT NULL
 );
@@ -87,7 +95,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class Database:
@@ -128,6 +136,18 @@ class Database:
         finally:
             await db.close()
 
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Serialize a short write transaction and roll it back on any failure."""
+        async with self.connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                yield db
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+
     async def fetchone(self, sql: str, args: tuple[Any, ...] = ()) -> aiosqlite.Row | None:
         async with self.connect() as db:
             cursor = await db.execute(sql, args)
@@ -142,6 +162,20 @@ class Database:
         async with self.connect() as db:
             await db.execute(sql, args)
             await db.commit()
+
+    @staticmethod
+    async def fetchone_on(db: aiosqlite.Connection, sql: str, args: tuple[Any, ...] = ()) -> aiosqlite.Row | None:
+        cursor = await db.execute(sql, args)
+        return await cursor.fetchone()
+
+    @staticmethod
+    async def fetchall_on(db: aiosqlite.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[aiosqlite.Row]:
+        cursor = await db.execute(sql, args)
+        return list(await cursor.fetchall())
+
+    @staticmethod
+    async def execute_on(db: aiosqlite.Connection, sql: str, args: tuple[Any, ...] = ()) -> None:
+        await db.execute(sql, args)
 
     async def set_json(self, key: str, value: Any) -> None:
         await self.execute(

@@ -145,6 +145,9 @@ class RunEngine:
                 start_step = 1
                 plan_task_id = None
                 model_calls = 0
+            phase = str((recovery_state or {}).get("phase") or "model_pending")
+            pending_tool_calls = list((recovery_state or {}).get("pending_tool_calls") or [])
+            tool_cursor = int((recovery_state or {}).get("tool_cursor") or 0)
             tools = ToolExecutor(
                 settings,
                 self.approvals.request,
@@ -158,6 +161,51 @@ class RunEngine:
                 tools.activated_tools.update(recovery_state.get("activated_tools", []))
             final = ""
             steps = start_step - 1
+            if phase == "final_ready":
+                final = str(recovery_state.get("final") or "")
+                return await self._finalize_run(run, final, max(0, start_step - 1), total, plan_task_id)
+            if phase == "tool_unknown":
+                raise RpcFault(
+                    -32002,
+                    "Tool outcome is unknown; manual reconciliation is required",
+                    {"run_id": run["id"]},
+                )
+            if phase == "blocked":
+                raise RpcFault(-32001, "Run stopped by runtime policy and cannot be resumed")
+            if phase in {"assistant_ready", "tools_running"}:
+                resume_step = start_step
+                for index in range(tool_cursor, len(pending_tool_calls)):
+                    call = pending_tool_calls[index]
+                    plan_task_id, _ = await self._execute_tool_call(
+                        run,
+                        tools,
+                        call,
+                        resume_step,
+                        model_messages,
+                        plan_task_id,
+                        tool_cursor=index,
+                        pending_tool_calls=pending_tool_calls,
+                        total=total,
+                        model_calls=model_calls,
+                    )
+                await self.checkpoints.save(
+                    run_id=run["id"],
+                    conversation_id=run["conversation_id"],
+                    sequence=resume_step,
+                    state=self._checkpoint_state(
+                        phase="model_pending",
+                        model_messages=model_messages,
+                        total=total,
+                        next_step=resume_step + 1,
+                        plan_task_id=plan_task_id,
+                        tools=tools,
+                        model_calls=model_calls,
+                        pending_tool_calls=[],
+                        tool_cursor=0,
+                    ),
+                )
+                steps = resume_step
+                start_step = resume_step + 1
             budget_warning_emitted = False
             repeated_calls = RepeatedToolCallGuard()
             for steps in range(start_step, settings.max_steps + 1):
@@ -261,34 +309,41 @@ class RunEngine:
                     model_config=model_config,
                     settings=settings,
                 )
-                # Save the input boundary before calling the model. An interrupted
-                # run can then replay from this step without losing its context.
-                await self.checkpoints.save(
-                    run_id=run["id"],
-                    conversation_id=run["conversation_id"],
-                    sequence=steps,
-                    state={
-                        "model_messages": model_messages,
-                        "usage": total,
-                        "next_step": steps,
-                        "plan_task_id": plan_task_id,
-                        "activated_tools": sorted(tools.activated_tools),
-                        "model_calls": model_calls,
-                    },
-                )
                 request = {
                     "messages": request_messages,
                     "tools": [*base_tools, *extra_tools],
                     "provider": model_config.get("provider") or settings.provider,
                     "model": model_config.get("model") or settings.model,
                 }
-                await self.runs.event(
-                    run,
-                    "model_request",
-                    step=steps,
-                    request=request,
-                    request_sha256=hashlib.sha256(dumps(request).encode("utf-8")).hexdigest(),
-                )
+                # The checkpoint and request trace share one commit, so a crash
+                # can never leave a request without its recovery boundary.
+                async with self.runs.transaction() as conn:
+                    await self.checkpoints.save(
+                        run_id=run["id"],
+                        conversation_id=run["conversation_id"],
+                        sequence=steps,
+                        state=self._checkpoint_state(
+                            phase="model_pending",
+                            model_messages=model_messages,
+                            total=total,
+                            next_step=steps,
+                            plan_task_id=plan_task_id,
+                            tools=tools,
+                            model_calls=model_calls,
+                            pending_tool_calls=[],
+                            tool_cursor=0,
+                        ),
+                        conn=conn,
+                    )
+                    request_event = await self.runs.event(
+                        run,
+                        "model_request",
+                        conn=conn,
+                        step=steps,
+                        request=request,
+                        request_sha256=hashlib.sha256(dumps(request).encode("utf-8")).hexdigest(),
+                    )
+                await self.runs.broadcast_event(request_event)
 
                 reply, model_calls = await self._call_model_step(
                     run,
@@ -301,31 +356,148 @@ class RunEngine:
                     settings,
                     total,
                     model_calls,
-                    model_messages,
                 )
-                if not reply.tool_calls:
-                    final = reply.content or ""
-                    break
-                if force_final:
+                assistant = {
+                    "role": "assistant",
+                    "content": reply.content,
+                    "reasoning": reply.reasoning,
+                    "tool_calls": reply.tool_calls,
+                }
+                model_messages.append(self._model_assistant_message(reply))
+                if force_final and reply.tool_calls:
+                    async with self.runs.transaction() as conn:
+                        await self.conversations.add_message(run["conversation_id"], assistant, conn=conn)
+                        assistant_event = await self.runs.event(
+                            run,
+                            "assistant_message",
+                            conn=conn,
+                            step=steps,
+                            message=assistant,
+                            tool_call=None,
+                            tool_result=None,
+                            usage=reply.usage,
+                            provider=model_config.get("provider") or settings.provider,
+                            model=model_config.get("model") or settings.model,
+                        )
+                        await self.checkpoints.save(
+                            run_id=run["id"],
+                            conversation_id=run["conversation_id"],
+                            sequence=steps,
+                            state=self._checkpoint_state(
+                                phase="blocked",
+                                model_messages=model_messages,
+                                total=total,
+                                next_step=steps,
+                                plan_task_id=plan_task_id,
+                                tools=tools,
+                                model_calls=model_calls,
+                                pending_tool_calls=reply.tool_calls,
+                                tool_cursor=0,
+                            ),
+                            conn=conn,
+                        )
+                    await self.runs.broadcast_event(assistant_event)
                     raise RuntimePolicyError(
                         "Model attempted a tool call while the run budget was finalizing",
                         stop_reason="run_budget",
                     )
+                if not reply.tool_calls:
+                    final = reply.content or ""
+                    async with self.runs.transaction() as conn:
+                        await self.conversations.add_message(run["conversation_id"], assistant, conn=conn)
+                        assistant_event = await self.runs.event(
+                            run,
+                            "assistant_message",
+                            conn=conn,
+                            step=steps,
+                            message=assistant,
+                            tool_call=None,
+                            tool_result=None,
+                            usage=reply.usage,
+                            provider=model_config.get("provider") or settings.provider,
+                            model=model_config.get("model") or settings.model,
+                        )
+                        await self.checkpoints.save(
+                            run_id=run["id"],
+                            conversation_id=run["conversation_id"],
+                            sequence=steps,
+                            state=self._checkpoint_state(
+                                phase="final_ready",
+                                model_messages=model_messages,
+                                total=total,
+                                next_step=steps + 1,
+                                plan_task_id=plan_task_id,
+                                tools=tools,
+                                model_calls=model_calls,
+                                pending_tool_calls=[],
+                                tool_cursor=0,
+                                final=final,
+                            ),
+                            conn=conn,
+                        )
+                    await self.runs.broadcast_event(assistant_event)
+                    break
                 repeated_calls.observe(reply.tool_calls)
-                for call in reply.tool_calls:
-                    plan_task_id = await self._execute_tool_call(run, tools, call, steps, model_messages, plan_task_id)
+                async with self.runs.transaction() as conn:
+                    await self.conversations.add_message(run["conversation_id"], assistant, conn=conn)
+                    assistant_event = await self.runs.event(
+                        run,
+                        "assistant_message",
+                        conn=conn,
+                        step=steps,
+                        message=assistant,
+                        tool_call=None,
+                        tool_result=None,
+                        usage=reply.usage,
+                        provider=model_config.get("provider") or settings.provider,
+                        model=model_config.get("model") or settings.model,
+                    )
+                    await self.checkpoints.save(
+                        run_id=run["id"],
+                        conversation_id=run["conversation_id"],
+                        sequence=steps,
+                        state=self._checkpoint_state(
+                            phase="assistant_ready",
+                            model_messages=model_messages,
+                            total=total,
+                            next_step=steps,
+                            plan_task_id=plan_task_id,
+                            tools=tools,
+                            model_calls=model_calls,
+                            pending_tool_calls=reply.tool_calls,
+                            tool_cursor=0,
+                        ),
+                        conn=conn,
+                    )
+                await self.runs.broadcast_event(assistant_event)
+                for index, call in enumerate(reply.tool_calls):
+                    plan_task_id, _ = await self._execute_tool_call(
+                        run,
+                        tools,
+                        call,
+                        steps,
+                        model_messages,
+                        plan_task_id,
+                        tool_cursor=index,
+                        pending_tool_calls=reply.tool_calls,
+                        total=total,
+                        model_calls=model_calls,
+                    )
                 await self.checkpoints.save(
                     run_id=run["id"],
                     conversation_id=run["conversation_id"],
                     sequence=steps,
-                    state={
-                        "model_messages": model_messages,
-                        "usage": total,
-                        "next_step": steps + 1,
-                        "plan_task_id": plan_task_id,
-                        "activated_tools": sorted(tools.activated_tools),
-                        "model_calls": model_calls,
-                    },
+                    state=self._checkpoint_state(
+                        phase="model_pending",
+                        model_messages=model_messages,
+                        total=total,
+                        next_step=steps + 1,
+                        plan_task_id=plan_task_id,
+                        tools=tools,
+                        model_calls=model_calls,
+                        pending_tool_calls=[],
+                        tool_cursor=0,
+                    ),
                 )
             else:
                 raise RuntimePolicyError(
@@ -418,7 +590,6 @@ class RunEngine:
         settings: Settings,
         total: dict[str, int],
         model_calls: int,
-        model_messages: list[dict[str, Any]],
     ) -> tuple[ModelReply, int]:
         # Deltas update the live UI; the assembled assistant message below
         # is the durable conversation and trace record.
@@ -476,48 +647,60 @@ class RunEngine:
                 f"Run budget exceeded by {after_call_budget.reason}",
                 stop_reason="run_budget",
             )
-        assistant = {
-            "role": "assistant",
-            "content": reply.content,
-            "reasoning": reply.reasoning,
-            "tool_calls": reply.tool_calls,
-        }
-        await self.conversations.add_message(run["conversation_id"], assistant)
-        await self.runs.event(
-            run,
-            "assistant_message",
-            step=step,
-            message=assistant,
-            tool_call=None,
-            tool_result=None,
-            usage=reply.usage,
-            provider=model_config.get("provider") or settings.provider,
-            model=model_config.get("model") or settings.model,
-        )
-        model_messages.append(
-            {
-                "role": "assistant",
-                "content": reply.content or "",
-                **(
-                    {
-                        "tool_calls": [
-                            {
-                                "id": c["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": c["name"],
-                                    "arguments": dumps(c["arguments"]),
-                                },
-                            }
-                            for c in reply.tool_calls
-                        ]
-                    }
-                    if reply.tool_calls
-                    else {}
-                ),
-            }
-        )
         return reply, model_calls
+
+    @staticmethod
+    def _checkpoint_state(
+        *,
+        phase: str,
+        model_messages: list[dict[str, Any]],
+        total: dict[str, int],
+        next_step: int,
+        plan_task_id: str | None,
+        tools: ToolExecutor,
+        model_calls: int,
+        pending_tool_calls: list[dict[str, Any]],
+        tool_cursor: int,
+        final: str | None = None,
+    ) -> dict[str, Any]:
+        state = {
+            "phase": phase,
+            "model_messages": model_messages,
+            "usage": total,
+            "next_step": next_step,
+            "plan_task_id": plan_task_id,
+            "activated_tools": sorted(tools.activated_tools),
+            "model_calls": model_calls,
+            "pending_tool_calls": pending_tool_calls,
+            "tool_cursor": tool_cursor,
+        }
+        if final is not None:
+            state["final"] = final
+        return state
+
+    @staticmethod
+    def _model_assistant_message(reply: ModelReply) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": reply.content or "",
+            **(
+                {
+                    "tool_calls": [
+                        {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": dumps(call["arguments"]),
+                            },
+                        }
+                        for call in reply.tool_calls
+                    ]
+                }
+                if reply.tool_calls
+                else {}
+            ),
+        }
 
     async def _record_context_prepared(
         self,
@@ -589,7 +772,12 @@ class RunEngine:
         step: int,
         model_messages: list[dict[str, Any]],
         plan_task_id: str | None,
-    ) -> str | None:
+        *,
+        tool_cursor: int,
+        pending_tool_calls: list[dict[str, Any]],
+        total: dict[str, int],
+        model_calls: int,
+    ) -> tuple[str | None, int]:
         await self.runs.event(
             run,
             "tool_call",
@@ -599,6 +787,15 @@ class RunEngine:
             tool_result=None,
             usage=None,
         )
+        execution = await self.runs.begin_tool(run, call, step)
+        if execution.get("status") in {"succeeded", "failed"}:
+            return plan_task_id, tool_cursor + 1
+        if execution.get("status") == "unknown":
+            raise RpcFault(
+                -32002,
+                "Tool outcome is unknown; manual reconciliation is required",
+                {"run_id": run["id"], "tool_call_id": call["id"]},
+            )
         started = asyncio.get_running_loop().time()
         try:
             output = await tools.execute(run["id"], call["name"], call["arguments"], call["id"], mode=run["mode"])
@@ -607,46 +804,76 @@ class RunEngine:
             output, success, error = exc.payload, False, str(exc)
         except Exception as exc:
             output, success, error = "", False, str(exc)
+        output_text = output if isinstance(output, str) else dumps(output)
         # Repeated computer failures and unchanged observations stop
         # the run before another ineffective action is attempted.
         self.computer_guard.record(
             run_id=run["id"],
             tool_name=call["name"],
             success=success,
-            output=output,
+            output=output_text,
             error=error,
         )
         duration_ms = round((asyncio.get_running_loop().time() - started) * 1000)
         if success and call["name"] == "task_create":
             try:
-                task_payload = json.loads(output)
+                task_payload = json.loads(output_text)
                 plan_task_id = task_payload.get("task", {}).get("id") or plan_task_id
             except json.JSONDecodeError:
                 pass
         tool_message = {
             "role": "tool",
-            "content": output or error,
+            "content": output_text or error,
             "name": call["name"],
             "tool_call_id": call["id"],
         }
-        await self.conversations.add_message(run["conversation_id"], tool_message)
+        next_cursor = tool_cursor + 1
         model_messages.append(tool_message)
-        await self.runs.event(
-            run,
-            "tool_result",
-            step=step,
-            message=None,
-            tool_call=None,
-            tool_result={
-                "tool_call_id": call["id"],
-                "tool_name": call["name"],
-                "success": success,
-                "output": output,
-                "error": error,
-                "duration_ms": duration_ms,
-            },
-            usage=None,
-        )
+        async with self.runs.transaction() as conn:
+            await self.runs.finish_tool(
+                conn,
+                run["id"],
+                call["id"],
+                success=success,
+                output=output_text,
+                error=error,
+            )
+            await self.conversations.add_message(run["conversation_id"], tool_message, conn=conn)
+            result_event = await self.runs.event(
+                run,
+                "tool_result",
+                conn=conn,
+                step=step,
+                message=None,
+                tool_call=None,
+                tool_result={
+                    "tool_call_id": call["id"],
+                    "tool_name": call["name"],
+                    "success": success,
+                    "output": output_text,
+                    "error": error,
+                    "duration_ms": duration_ms,
+                },
+                usage=None,
+            )
+            await self.checkpoints.save(
+                run_id=run["id"],
+                conversation_id=run["conversation_id"],
+                sequence=step,
+                state=self._checkpoint_state(
+                    phase="tools_running",
+                    model_messages=model_messages,
+                    total=total,
+                    next_step=step,
+                    plan_task_id=plan_task_id,
+                    tools=tools,
+                    model_calls=model_calls,
+                    pending_tool_calls=pending_tool_calls,
+                    tool_cursor=next_cursor,
+                ),
+                conn=conn,
+            )
+        await self.runs.broadcast_event(result_event)
         await self.evidence.record(
             run["id"],
             "tool_result",
@@ -655,14 +882,14 @@ class RunEngine:
                 "tool_name": call["name"],
                 "arguments": call["arguments"],
                 "success": success,
-                "output": output,
+                "output": output_text,
                 "error": error,
                 "duration_ms": duration_ms,
                 "task_id": plan_task_id,
                 "task_step": step,
             },
         )
-        return plan_task_id
+        return plan_task_id, next_cursor
 
     @staticmethod
     def history_for_model(history: list[dict[str, Any]]) -> list[dict[str, Any]]:

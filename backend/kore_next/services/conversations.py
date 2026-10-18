@@ -105,19 +105,26 @@ class ConversationService:
             raise RpcFault(-32000, "Conversation not found")
         return row
 
-    async def add_message(self, cid: str, message: dict[str, Any]) -> None:
-        await self.db.execute(
+    async def add_message(self, cid: str, message: dict[str, Any], *, conn: Any | None = None) -> None:
+        stamp = now()
+        insert_sql = (
             "INSERT INTO messages(conversation_id,role,content,name,tool_call_id,"
-            "tool_calls_json,reasoning,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (
-                cid,
-                message["role"],
-                message.get("content"),
-                message.get("name"),
-                message.get("tool_call_id"),
-                dumps(message.get("tool_calls", [])),
-                message.get("reasoning"),
-                now(),
-            ),
+            "tool_calls_json,reasoning,created_at) VALUES(?,?,?,?,?,?,?,?)"
         )
-        await self.db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now(), cid))
+        insert_args = (
+            cid,
+            message["role"],
+            message.get("content"),
+            message.get("name"),
+            message.get("tool_call_id"),
+            dumps(message.get("tool_calls", [])),
+            message.get("reasoning"),
+            stamp,
+        )
+        update_sql = "UPDATE conversations SET updated_at=? WHERE id=?"
+        if conn is None:
+            await self.db.execute(insert_sql, insert_args)
+            await self.db.execute(update_sql, (stamp, cid))
+        else:
+            await self.db.execute_on(conn, insert_sql, insert_args)
+            await self.db.execute_on(conn, update_sql, (stamp, cid))

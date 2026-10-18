@@ -17,14 +17,19 @@ class CheckpointStore:
         conversation_id: str | None,
         sequence: int,
         state: dict[str, Any],
+        conn: Any | None = None,
     ) -> dict[str, Any]:
         stamp = now()
-        await self.db.execute(
+        sql = (
             "INSERT INTO checkpoints(run_id,conversation_id,sequence,data_json,created_at,updated_at) "
             "VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET "
-            "sequence=excluded.sequence,data_json=excluded.data_json,updated_at=excluded.updated_at",
-            (run_id, conversation_id, sequence, dumps(state), stamp, stamp),
+            "sequence=excluded.sequence,data_json=excluded.data_json,updated_at=excluded.updated_at"
         )
+        args = (run_id, conversation_id, sequence, dumps(state), stamp, stamp)
+        if conn is None:
+            await self.db.execute(sql, args)
+        else:
+            await self.db.execute_on(conn, sql, args)
         return {
             "run_id": run_id,
             "conversation_id": conversation_id,
