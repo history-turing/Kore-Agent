@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS memories(
 );
 CREATE TABLE IF NOT EXISTS checkpoints(
  run_id TEXT PRIMARY KEY, conversation_id TEXT, sequence INTEGER NOT NULL,
- data_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ data_json TEXT NOT NULL, through_event_seq INTEGER NOT NULL DEFAULT 0, digest TEXT,
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS evidence(
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -103,7 +104,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Database:
@@ -125,6 +126,17 @@ class Database:
                     connection.backup(destination)
         async with self.connect() as db:
             await db.executescript(SCHEMA)
+            if version < 5:
+                exists = await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'")
+                if await exists.fetchone():
+                    columns = await db.execute("PRAGMA table_info(checkpoints)")
+                    names = {row["name"] for row in await columns.fetchall()}
+                    if "through_event_seq" not in names:
+                        await db.execute(
+                            "ALTER TABLE checkpoints ADD COLUMN through_event_seq INTEGER NOT NULL DEFAULT 0"
+                        )
+                    if "digest" not in names:
+                        await db.execute("ALTER TABLE checkpoints ADD COLUMN digest TEXT")
             if version < 2:
                 await db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
             await db.execute(

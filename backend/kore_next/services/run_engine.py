@@ -188,6 +188,7 @@ class RunEngine:
                         total=total,
                         model_calls=model_calls,
                     )
+                snapshot = await self.runs.runtime_event_store.latest(run["id"])
                 await self.checkpoints.save(
                     run_id=run["id"],
                     conversation_id=run["conversation_id"],
@@ -203,6 +204,8 @@ class RunEngine:
                         pending_tool_calls=[],
                         tool_cursor=0,
                     ),
+                    through_event_seq=snapshot["event_seq"],
+                    digest=snapshot["digest"],
                 )
                 steps = resume_step
                 start_step = resume_step + 1
@@ -318,6 +321,7 @@ class RunEngine:
                 # The checkpoint and request trace share one commit, so a crash
                 # can never leave a request without its recovery boundary.
                 async with self.runs.transaction() as conn:
+                    snapshot = await self.runs.runtime_event_store.latest(run["id"], conn=conn)
                     await self.checkpoints.save(
                         run_id=run["id"],
                         conversation_id=run["conversation_id"],
@@ -333,6 +337,8 @@ class RunEngine:
                             pending_tool_calls=[],
                             tool_cursor=0,
                         ),
+                        through_event_seq=snapshot["event_seq"],
+                        digest=snapshot["digest"],
                         conn=conn,
                     )
                     request_event = await self.runs.event(
@@ -394,6 +400,8 @@ class RunEngine:
                                 pending_tool_calls=reply.tool_calls,
                                 tool_cursor=0,
                             ),
+                            through_event_seq=assistant_event["event_seq"],
+                            digest=assistant_event["runtime_digest"],
                             conn=conn,
                         )
                     await self.runs.broadcast_event(assistant_event)
@@ -433,6 +441,8 @@ class RunEngine:
                                 tool_cursor=0,
                                 final=final,
                             ),
+                            through_event_seq=assistant_event["event_seq"],
+                            digest=assistant_event["runtime_digest"],
                             conn=conn,
                         )
                     await self.runs.broadcast_event(assistant_event)
@@ -467,6 +477,8 @@ class RunEngine:
                             pending_tool_calls=reply.tool_calls,
                             tool_cursor=0,
                         ),
+                        through_event_seq=assistant_event["event_seq"],
+                        digest=assistant_event["runtime_digest"],
                         conn=conn,
                     )
                 await self.runs.broadcast_event(assistant_event)
@@ -483,6 +495,7 @@ class RunEngine:
                         total=total,
                         model_calls=model_calls,
                     )
+                snapshot = await self.runs.runtime_event_store.latest(run["id"])
                 await self.checkpoints.save(
                     run_id=run["id"],
                     conversation_id=run["conversation_id"],
@@ -498,6 +511,8 @@ class RunEngine:
                         pending_tool_calls=[],
                         tool_cursor=0,
                     ),
+                    through_event_seq=snapshot["event_seq"],
+                    digest=snapshot["digest"],
                 )
             else:
                 raise RuntimePolicyError(
@@ -871,6 +886,8 @@ class RunEngine:
                     pending_tool_calls=pending_tool_calls,
                     tool_cursor=next_cursor,
                 ),
+                through_event_seq=result_event["event_seq"],
+                digest=result_event["runtime_digest"],
                 conn=conn,
             )
         await self.runs.broadcast_event(result_event)

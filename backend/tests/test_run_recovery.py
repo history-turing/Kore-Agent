@@ -206,3 +206,83 @@ async def test_message_and_checkpoint_rollback_together(recovery_app, monkeypatc
         await app._execute_run(run)
     messages = (await app.conversation_get({"conversation_id": conversation["id"]}))["messages"]
     assert [message["role"] for message in messages] == ["user"]
+
+
+async def test_checkpoint_digest_mismatch_blocks_recovery(recovery_app):
+    app = recovery_app
+    conversation, run = await _conversation_and_run(app)
+    await app.runs.event(run, "user_message", message={"role": "user", "content": "hello"})
+    await app.checkpoints.save(
+        run_id=run["id"],
+        conversation_id=conversation["id"],
+        sequence=1,
+        state={"phase": "model_pending", "model_messages": [], "usage": {}, "next_step": 1},
+        through_event_seq=1,
+        digest="not-the-right-digest",
+    )
+    await app.db.execute("UPDATE runs SET status='interrupted' WHERE id=?", (run["id"],))
+    with pytest.raises(RpcFault) as error:
+        await app.run_recover({"run_id": run["id"]})
+    assert error.value.code == -32003
+
+
+async def test_run_checkpoint_records_event_watermark(recovery_app, monkeypatch):
+    app = recovery_app
+    _, run = await _conversation_and_run(app)
+
+    async def fake_complete(_self, *_args, **_kwargs):
+        return ModelReply(
+            content="done",
+            reasoning=None,
+            tool_calls=[],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
+    await app._execute_run(run)
+    checkpoint = await app.checkpoints.get(run["id"])
+    assert checkpoint["through_event_seq"] > 0
+    assert checkpoint["digest"]
+    verified = await app.runs.verify_events(run["id"])
+    assert verified["valid"] is True
+    assert verified["event_seq"] >= checkpoint["through_event_seq"]
+
+
+async def test_snapshot_replays_tail_without_model_call(recovery_app, monkeypatch):
+    app = recovery_app
+    conversation, run = await _conversation_and_run(app)
+    await app.runs.event(run, "user_message", message={"role": "user", "content": "hello"})
+    events = await app.runs.runtime_events(run["id"])
+    await app.checkpoints.save(
+        run_id=run["id"],
+        conversation_id=conversation["id"],
+        sequence=1,
+        state={
+            "phase": "model_pending",
+            "model_messages": [{"role": "user", "content": "hello"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            "next_step": 1,
+            "plan_task_id": None,
+            "activated_tools": [],
+            "model_calls": 0,
+            "pending_tool_calls": [],
+            "tool_cursor": 0,
+        },
+        through_event_seq=events[0]["event_seq"],
+        digest=events[0]["digest"],
+    )
+    await app.runs.event(
+        run,
+        "assistant_message",
+        step=1,
+        message={"role": "assistant", "content": "from the tail"},
+        usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    )
+    await app.db.execute("UPDATE runs SET status='interrupted' WHERE id=?", (run["id"],))
+
+    async def unexpected_complete(*_args, **_kwargs):
+        pytest.fail("tail replay must not call the model")
+
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", unexpected_complete)
+    recovered = await app.run_recover({"run_id": run["id"]})
+    assert recovered["result"]["final_message"]["content"] == "from the tail"

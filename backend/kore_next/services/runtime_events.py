@@ -133,10 +133,12 @@ class RuntimeEventStore:
             for row in rows
         ]
 
-    async def verify(self, run_id: str) -> dict[str, Any]:
+    async def verify(self, run_id: str, *, through_event_seq: int | None = None) -> dict[str, Any]:
+        clause = " AND event_seq<=?" if through_event_seq is not None else ""
+        args = (run_id, through_event_seq) if through_event_seq is not None else (run_id,)
         rows = await self.db.fetchall(
-            "SELECT * FROM runtime_events WHERE run_id=? ORDER BY event_seq",
-            (run_id,),
+            f"SELECT * FROM runtime_events WHERE run_id=?{clause} ORDER BY event_seq",
+            args,
         )
         previous: str | None = None
         for expected, row in enumerate(rows, start=1):
@@ -165,6 +167,15 @@ class RuntimeEventStore:
             "digest": previous,
             "events": len(rows),
         }
+
+    async def latest(self, run_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+        sql = "SELECT event_seq,digest FROM runtime_events WHERE run_id=? ORDER BY event_seq DESC LIMIT 1"
+        row = await (
+            self.db.fetchone_on(conn, sql, (run_id,)) if conn is not None else self.db.fetchone(sql, (run_id,))
+        )
+        return (
+            {"event_seq": int(row["event_seq"]), "digest": row["digest"]} if row else {"event_seq": 0, "digest": None}
+        )
 
     async def latest_seq(self, run_id: str) -> int:
         row = await self.db.fetchone(

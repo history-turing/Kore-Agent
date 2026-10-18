@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -35,6 +36,47 @@ def project_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
             )
     return messages
+
+
+def project_model_messages(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project only facts that belong in the next model request."""
+    messages: list[dict[str, Any]] = []
+    for event in events:
+        kind = event.get("type")
+        if kind == "user_message":
+            message = event.get("message") or {}
+            messages.append({"role": "user", "content": message.get("content") or ""})
+        elif kind == "assistant_message":
+            message = event.get("message") or {}
+            item = {"role": "assistant", "content": message.get("content") or ""}
+            calls = message.get("tool_calls") or []
+            if calls:
+                item["tool_calls"] = [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {"name": call["name"], "arguments": _arguments(call.get("arguments"))},
+                    }
+                    for call in calls
+                ]
+            messages.append(item)
+        elif kind == "tool_result":
+            result = event.get("tool_result") or {}
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": result.get("output") or result.get("error") or "",
+                    "name": result.get("tool_name"),
+                    "tool_call_id": result.get("tool_call_id"),
+                }
+            )
+    return messages
+
+
+def _arguments(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value or {}, ensure_ascii=False, separators=(",", ":"))
 
 
 def classify_terminal(events: list[dict[str, Any]]) -> dict[str, Any] | None:

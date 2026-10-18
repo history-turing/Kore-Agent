@@ -106,3 +106,5 @@ automation tick
 `runtime_events` 是新增的运行事实日志，记录 `turn_id`、`run_id`、`invocation_id`、`event_seq` 和 digest。现有 `events` 表暂时保留用于兼容 Trace；后续阶段会把 UI、模型上下文和终态读取逐步切换到同一份事件日志。
 
 `runtime_projections.py` 提供纯函数式的消息与终态投影。投影只读取事件，不修改事件历史；工具执行状态由 `tool_executions` 表持久化，派发和结果分别提交。
+
+检查点现在同时记录 `through_event_seq` 和前缀 digest。恢复时先校验事件前缀，再只应用水位线之后的模型可见事件；恢复出的新 Run 拥有独立事件序列，继承的是物化状态而不是旧 Run 的序号。检查点与日志不一致时会拒绝自动恢复。

@@ -18,14 +18,18 @@ class CheckpointStore:
         sequence: int,
         state: dict[str, Any],
         conn: Any | None = None,
+        through_event_seq: int = 0,
+        digest: str | None = None,
     ) -> dict[str, Any]:
         stamp = now()
         sql = (
-            "INSERT INTO checkpoints(run_id,conversation_id,sequence,data_json,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET "
-            "sequence=excluded.sequence,data_json=excluded.data_json,updated_at=excluded.updated_at"
+            "INSERT INTO checkpoints("
+            "run_id,conversation_id,sequence,data_json,through_event_seq,digest,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET "
+            "sequence=excluded.sequence,data_json=excluded.data_json,"
+            "through_event_seq=excluded.through_event_seq,digest=excluded.digest,updated_at=excluded.updated_at"
         )
-        args = (run_id, conversation_id, sequence, dumps(state), stamp, stamp)
+        args = (run_id, conversation_id, sequence, dumps(state), through_event_seq, digest, stamp, stamp)
         if conn is None:
             await self.db.execute(sql, args)
         else:
@@ -35,6 +39,8 @@ class CheckpointStore:
             "conversation_id": conversation_id,
             "sequence": sequence,
             "state": state,
+            "through_event_seq": through_event_seq,
+            "digest": digest,
             "updated_at": stamp,
         }
 
@@ -47,6 +53,8 @@ class CheckpointStore:
             "conversation_id": row["conversation_id"],
             "sequence": row["sequence"],
             "state": loads(row["data_json"], {}),
+            "through_event_seq": row["through_event_seq"],
+            "digest": row["digest"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -62,4 +70,6 @@ class CheckpointStore:
             conversation_id=checkpoint["conversation_id"],
             sequence=checkpoint["sequence"],
             state=state,
+            through_event_seq=0,
+            digest=None,
         )

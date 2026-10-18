@@ -13,6 +13,7 @@ from ..run_insights import summarize_run_usage
 from ..runtime_policy import RunBudget
 from ..util import dumps, loads, now, uid
 from .runtime_events import RuntimeEventStore
+from .runtime_projections import project_model_messages
 
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 ExecuteRun = Callable[[dict[str, Any], dict[str, Any] | None], Awaitable[dict[str, Any]]]
@@ -157,7 +158,9 @@ class RunStore:
         }
         if invocation_id or step is not None:
             event["invocation_id"] = invocation_id or f"{run['id']}:{step}"
-        await self.runtime_event_store.append(conn, run=run, event=event)
+        runtime_event = await self.runtime_event_store.append(conn, run=run, event=event)
+        event["event_seq"] = runtime_event["event_seq"]
+        event["runtime_digest"] = runtime_event["digest"]
         await self.db.execute_on(
             conn,
             "INSERT INTO events VALUES(?,?,?,?,?,?)",
@@ -322,6 +325,38 @@ class RunStore:
             raise RpcFault(-32001, "Run recovery is already in progress", {"run_id": active["id"]})
         state = dict(checkpoint["state"])
         state["recovered_from_run_id"] = old["id"]
+        through_event_seq = int(checkpoint.get("through_event_seq") or 0)
+        covered_digest = checkpoint.get("digest")
+        state["snapshot_source_run_id"] = old["id"]
+        state["snapshot_source_event_seq"] = through_event_seq
+        state["snapshot_source_digest"] = covered_digest
+        if through_event_seq:
+            verification = await self.runtime_event_store.verify(old["id"], through_event_seq=through_event_seq)
+            if not verification["valid"] or (
+                checkpoint.get("digest") and verification.get("digest") != checkpoint["digest"]
+            ):
+                raise RpcFault(
+                    -32003,
+                    "Run checkpoint does not match its event log",
+                    {"run_id": old["id"], **verification},
+                )
+            tail = await self.runtime_event_store.list(old["id"], after_seq=through_event_seq)
+            if tail:
+                through_event_seq = int(tail[-1]["event_seq"])
+                covered_digest = tail[-1]["digest"]
+                state["model_messages"] = [
+                    *state.get("model_messages", []),
+                    *project_model_messages(tail),
+                ]
+                last = tail[-1]
+                if last["type"] == "assistant_message":
+                    message = last.get("message") or {}
+                    calls = message.get("tool_calls") or []
+                    state["pending_tool_calls"] = calls
+                    state["tool_cursor"] = 0
+                    state["phase"] = "assistant_ready" if calls else "final_ready"
+                    if not calls:
+                        state["final"] = message.get("content") or ""
         phase = str(state.get("phase") or "model_pending")
         if phase == "tool_unknown":
             raise self._unknown_tool_fault(old["id"], state)
@@ -357,6 +392,10 @@ class RunStore:
             conversation_id=checkpoint["conversation_id"],
             sequence=checkpoint["sequence"],
             state=state,
+            # The new run has its own event sequence; its initial snapshot is
+            # inherited materialized state, not a prefix of the new log.
+            through_event_seq=0,
+            digest=None,
         )
         task = asyncio.create_task(self.execute_run(run, state))
         self.running[run["id"]] = task
