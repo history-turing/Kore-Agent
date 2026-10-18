@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from .tool_arguments import parse_tool_arguments
 from .types import DeltaSink, ModelReply, model_usage, openai_cache_usage
 
 
@@ -44,17 +45,16 @@ async def complete_chat(
     calls: list[dict[str, Any]] = []
     for item in message.get("tool_calls") or []:
         raw = item.get("function", {}).get("arguments", "{}")
-        try:
-            arguments = json.loads(raw)
-        except json.JSONDecodeError:
-            arguments = {}
-        calls.append(
-            {
-                "id": item.get("id") or os.urandom(8).hex(),
-                "name": item.get("function", {}).get("name", ""),
-                "arguments": arguments,
-            }
-        )
+        arguments, arguments_error = parse_tool_arguments(raw)
+        call = {
+            "id": item.get("id") or os.urandom(8).hex(),
+            "name": item.get("function", {}).get("name", ""),
+            "arguments": arguments,
+        }
+        if arguments_error:
+            call["arguments_raw"] = raw
+            call["arguments_error"] = arguments_error
+        calls.append(call)
     usage = payload.get("usage") or {}
     return ModelReply(
         content=message.get("content"),
@@ -131,11 +131,16 @@ async def stream_chat(
     calls = []
     for index in sorted(tool_parts):
         part = tool_parts[index]
-        try:
-            arguments = json.loads(part["arguments"] or "{}")
-        except json.JSONDecodeError:
-            arguments = {}
-        calls.append({"id": part["id"] or os.urandom(8).hex(), "name": part["name"], "arguments": arguments})
+        arguments, arguments_error = parse_tool_arguments(part["arguments"])
+        call = {
+            "id": part["id"] or os.urandom(8).hex(),
+            "name": part["name"],
+            "arguments": arguments,
+        }
+        if arguments_error:
+            call["arguments_raw"] = part["arguments"]
+            call["arguments_error"] = arguments_error
+        calls.append(call)
     inp = int(usage.get("prompt_tokens", 0))
     out = int(usage.get("completion_tokens", 0))
     return ModelReply(

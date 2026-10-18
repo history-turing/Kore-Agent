@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from .tool_arguments import parse_tool_arguments
 from .types import DeltaSink, ModelReply, model_usage
 
 
@@ -196,11 +197,17 @@ async def stream_messages(
                     usage.update(event.get("usage") or {})
     calls = []
     for item in tools.values():
-        try:
-            arguments = json.loads(item["raw"]) if item["raw"] else item["input"]
-        except json.JSONDecodeError:
-            arguments = item["input"]
-        calls.append({"id": item["id"], "name": item["name"], "arguments": arguments})
+        raw = item["raw"]
+        arguments, arguments_error = parse_tool_arguments(raw if raw else item.get("input"))
+        call = {
+            "id": item["id"],
+            "name": item["name"],
+            "arguments": arguments,
+        }
+        if arguments_error:
+            call["arguments_raw"] = raw
+            call["arguments_error"] = arguments_error
+        calls.append(call)
     return ModelReply(
         "".join(text_parts) or None,
         "".join(reasoning_parts) or None,

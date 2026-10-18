@@ -21,7 +21,7 @@ from ..model.types import ModelReply
 from ..rpc import RpcFault
 from ..runtime_policy import RepeatedToolCallGuard, RunBudget, RuntimePolicyError
 from ..tasks import TaskService
-from ..tools import ToolExecutor
+from ..tools import ToolError, ToolExecutor, ToolProjection
 from ..util import dumps, now, uid
 from .approvals import ApprovalService
 from .artifacts import ArtifactService
@@ -161,7 +161,13 @@ class RunEngine:
                 self.tool_router,
             )
             if recovery_state:
-                tools.activated_tools.update(recovery_state.get("activated_tools", []))
+                activation_steps = recovery_state.get("tool_activation_steps")
+                if isinstance(activation_steps, dict):
+                    tools.restore_activations(activation_steps)
+                else:
+                    # Older checkpoints only stored names; make them visible
+                    # immediately rather than losing the recovered capability set.
+                    tools.restore_activations({name: 0 for name in recovery_state.get("activated_tools", [])})
             final = ""
             steps = start_step - 1
             if phase == "final_ready":
@@ -179,6 +185,8 @@ class RunEngine:
                 raise RpcFault(-32001, "Run was abandoned after an unknown tool outcome")
             if phase in {"assistant_ready", "tools_running"}:
                 resume_step = start_step
+                projection = tools.project(resume_step, run["mode"])
+                seen_call_ids: set[str] = set()
                 for index in range(tool_cursor, len(pending_tool_calls)):
                     call = pending_tool_calls[index]
                     plan_task_id, _ = await self._execute_tool_call(
@@ -192,6 +200,8 @@ class RunEngine:
                         pending_tool_calls=pending_tool_calls,
                         total=total,
                         model_calls=model_calls,
+                        projection=projection,
+                        seen_call_ids=seen_call_ids,
                     )
                 snapshot = await self.runs.runtime_event_store.latest(run["id"])
                 await self.checkpoints.save(
@@ -259,7 +269,8 @@ class RunEngine:
                         usage=None,
                         **self.run_budget.event_fields(budget_decision),
                     )
-                base_tools, extra_tools = tools.tool_definitions(run["mode"])
+                projection = tools.project(steps, run["mode"])
+                base_tools, extra_tools = list(projection.base), list(projection.extra)
                 if force_final:
                     base_tools = []
                     extra_tools = []
@@ -487,6 +498,7 @@ class RunEngine:
                         conn=conn,
                     )
                 await self.runs.broadcast_event(assistant_event)
+                seen_call_ids: set[str] = set()
                 for index, call in enumerate(reply.tool_calls):
                     plan_task_id, _ = await self._execute_tool_call(
                         run,
@@ -499,6 +511,8 @@ class RunEngine:
                         pending_tool_calls=reply.tool_calls,
                         total=total,
                         model_calls=model_calls,
+                        projection=projection,
+                        seen_call_ids=seen_call_ids,
                     )
                 snapshot = await self.runs.runtime_event_store.latest(run["id"])
                 await self.checkpoints.save(
@@ -689,7 +703,8 @@ class RunEngine:
             "usage": total,
             "next_step": next_step,
             "plan_task_id": plan_task_id,
-            "activated_tools": sorted(tools.activated_tools),
+            "activated_tools": sorted(tools.activation_steps),
+            "tool_activation_steps": dict(tools.activation_steps),
             "model_calls": model_calls,
             "pending_tool_calls": pending_tool_calls,
             "tool_cursor": tool_cursor,
@@ -797,6 +812,8 @@ class RunEngine:
         pending_tool_calls: list[dict[str, Any]],
         total: dict[str, int],
         model_calls: int,
+        projection: ToolProjection,
+        seen_call_ids: set[str],
     ) -> tuple[str | None, int]:
         await self.runs.event(
             run,
@@ -807,23 +824,64 @@ class RunEngine:
             tool_result=None,
             usage=None,
         )
-        execution = await self.runs.begin_tool(run, call, step)
-        if execution.get("status") in {"succeeded", "failed"}:
-            return plan_task_id, tool_cursor + 1
-        if execution.get("status") == "unknown":
-            raise RpcFault(
-                -32002,
-                "Tool outcome is unknown; manual reconciliation is required",
-                {"run_id": run["id"], "tool_call_id": call["id"]},
-            )
         started = asyncio.get_running_loop().time()
-        try:
-            output = await tools.execute(run["id"], call["name"], call["arguments"], call["id"], mode=run["mode"])
-            success, error = True, None
-        except McpToolError as exc:
-            output, success, error = exc.payload, False, str(exc)
-        except Exception as exc:
-            output, success, error = "", False, str(exc)
+        call_id = str(call.get("id") or "")
+        name = str(call.get("name") or "")
+        arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+        prepared = None
+        dispatched = False
+        output = ""
+        success = False
+        error: str | None = None
+        error_code: str | None = None
+        retryable = False
+        if not call_id or call_id in seen_call_ids:
+            error = "Duplicate or missing tool call id"
+            error_code = "duplicate_call_id"
+        else:
+            seen_call_ids.add(call_id)
+            try:
+                prepared = await tools.preflight(
+                    run["id"],
+                    name,
+                    arguments,
+                    call_id,
+                    mode=run["mode"],
+                    projection=projection,
+                    effective_step=step + 1,
+                    arguments_error=call.get("arguments_error"),
+                )
+            except ToolError as exc:
+                error, error_code, retryable = str(exc), exc.code, exc.retryable
+            except Exception as exc:
+                error, error_code = str(exc), "tool_error"
+        if prepared is not None:
+            try:
+                execution = await self.runs.begin_tool(run, call, step)
+            except ToolError as exc:
+                prepared = None
+                error, error_code, retryable = str(exc), exc.code, exc.retryable
+            else:
+                if execution.get("status") in {"succeeded", "failed"}:
+                    return plan_task_id, tool_cursor + 1
+                if execution.get("status") == "unknown":
+                    raise RpcFault(
+                        -32002,
+                        "Tool outcome is unknown; manual reconciliation is required",
+                        {"run_id": run["id"], "tool_call_id": call_id},
+                    )
+                dispatched = True
+        if prepared is not None:
+            try:
+                output = await prepared.dispatch()
+                success, error, error_code, retryable = True, None, None, False
+            except McpToolError as exc:
+                output, success, error, error_code = exc.payload, False, str(exc), "mcp_error"
+            except ToolError as exc:
+                output, success, error, error_code = "", False, str(exc), exc.code
+                retryable = exc.retryable
+            except Exception as exc:
+                output, success, error, error_code = "", False, str(exc), "tool_error"
         output_text = output if isinstance(output, str) else dumps(output)
         output_ref: dict[str, Any] | None = None
         model_output = output_text
@@ -838,17 +896,18 @@ class RunEngine:
                     "size_bytes": archived["size_bytes"],
                 }
                 model_output = self.offload.placeholder(archived)
-        # Repeated computer failures and unchanged observations stop
-        # the run before another ineffective action is attempted.
-        self.computer_guard.record(
-            run_id=run["id"],
-            tool_name=call["name"],
-            success=success,
-            output=output_text,
-            error=error,
-        )
+        if dispatched:
+            # Repeated computer failures and unchanged observations stop
+            # the run before another ineffective action is attempted.
+            self.computer_guard.record(
+                run_id=run["id"],
+                tool_name=name,
+                success=success,
+                output=output_text,
+                error=error,
+            )
         duration_ms = round((asyncio.get_running_loop().time() - started) * 1000)
-        if success and call["name"] == "task_create":
+        if success and name == "task_create":
             try:
                 task_payload = json.loads(output_text)
                 plan_task_id = task_payload.get("task", {}).get("id") or plan_task_id
@@ -857,20 +916,22 @@ class RunEngine:
         tool_message = {
             "role": "tool",
             "content": model_output or error,
-            "name": call["name"],
-            "tool_call_id": call["id"],
+            "name": name,
+            "tool_call_id": call_id,
         }
         next_cursor = tool_cursor + 1
         model_messages.append(tool_message)
         async with self.runs.transaction() as conn:
-            await self.runs.finish_tool(
-                conn,
-                run["id"],
-                call["id"],
-                success=success,
-                output=output_text,
-                error=error,
-            )
+            if dispatched:
+                await self.runs.finish_tool(
+                    conn,
+                    run["id"],
+                    call_id,
+                    success=success,
+                    output=output_text,
+                    error=error,
+                    error_code=error_code,
+                )
             await self.conversations.add_message(run["conversation_id"], tool_message, conn=conn)
             result_event = await self.runs.event(
                 run,
@@ -880,12 +941,15 @@ class RunEngine:
                 message=None,
                 tool_call=None,
                 tool_result={
-                    "tool_call_id": call["id"],
-                    "tool_name": call["name"],
+                    "tool_call_id": call_id,
+                    "tool_name": name,
                     "success": success,
                     "output": model_output,
                     "output_ref": output_ref,
                     "error": error,
+                    "error_code": error_code,
+                    "retryable": retryable,
+                    "dispatched": dispatched,
                     "duration_ms": duration_ms,
                 },
                 usage=None,
@@ -915,13 +979,16 @@ class RunEngine:
                 run["id"],
                 result_event["event_seq"],
                 {
-                    "tool_call_id": call["id"],
-                    "tool_name": call["name"],
-                    "arguments": call["arguments"],
+                    "tool_call_id": call_id,
+                    "tool_name": name,
+                    "arguments": arguments,
                     "success": success,
                     "output": model_output,
                     "output_ref": output_ref,
                     "error": error,
+                    "error_code": error_code,
+                    "retryable": retryable,
+                    "dispatched": dispatched,
                     "duration_ms": duration_ms,
                     "task_id": plan_task_id,
                     "task_step": step,
@@ -971,7 +1038,8 @@ class RunEngine:
             "You are KoreAgent Next, a reliable local AI agent. Work toward the user's actual result, "
             "use tools when useful, keep durable task state current, publish deliverables, and never "
             "claim an action succeeded without evidence. "
-            "Use tool_catalog to discover and activate optional capabilities before calling them."
+            "Use tool_catalog to discover and activate optional capabilities before calling them; "
+            "newly activated tools become callable on the next model step."
         )
         if mode == "plan":
             return common + (

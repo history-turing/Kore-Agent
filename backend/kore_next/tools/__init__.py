@@ -7,7 +7,9 @@ from .definitions import (
     TOOLS,
     builtin_tool_definitions,
 )
+from .errors import ToolArgumentError, ToolDenied, ToolError, ToolNotVisibleYet
 from .executor import ApprovalGate, ToolExecutor
+from .projection import ToolProjection
 from .shell import shell_command_argv
 
 __all__ = [
@@ -16,7 +18,12 @@ __all__ = [
     "PLAN_ALLOWED_TOOLS",
     "TOOLS",
     "TOOL_CATALOG_DEFINITION",
+    "ToolArgumentError",
+    "ToolDenied",
+    "ToolError",
     "ToolExecutor",
+    "ToolNotVisibleYet",
+    "ToolProjection",
     "builtin_tool_definitions",
     "shell_command_argv",
 ]

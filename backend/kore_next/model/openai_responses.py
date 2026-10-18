@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from .tool_arguments import parse_tool_arguments
 from .types import DeltaSink, ModelReply, model_usage, openai_cache_usage
 
 
@@ -61,17 +62,16 @@ async def complete_responses(
                     texts.append(part.get("text", ""))
         elif item.get("type") == "function_call":
             raw = item.get("arguments", "{}")
-            try:
-                arguments = json.loads(raw)
-            except json.JSONDecodeError:
-                arguments = {}
-            calls.append(
-                {
-                    "id": item.get("call_id") or item.get("id") or os.urandom(8).hex(),
-                    "name": item.get("name", ""),
-                    "arguments": arguments,
-                }
-            )
+            arguments, arguments_error = parse_tool_arguments(raw)
+            call = {
+                "id": item.get("call_id") or item.get("id") or os.urandom(8).hex(),
+                "name": item.get("name", ""),
+                "arguments": arguments,
+            }
+            if arguments_error:
+                call["arguments_raw"] = raw
+                call["arguments_error"] = arguments_error
+            calls.append(call)
     usage = payload.get("usage") or {}
     inp = int(usage.get("input_tokens", 0))
     out = int(usage.get("output_tokens", 0))
@@ -143,11 +143,16 @@ async def stream_responses(
     usage = (final or {}).get("usage") or {}
     parsed_calls = []
     for call in calls.values():
-        try:
-            arguments = json.loads(call["raw"] or "{}")
-        except json.JSONDecodeError:
-            arguments = {}
-        parsed_calls.append({"id": call["id"], "name": call["name"], "arguments": arguments})
+        arguments, arguments_error = parse_tool_arguments(call["raw"])
+        parsed_call = {
+            "id": call["id"],
+            "name": call["name"],
+            "arguments": arguments,
+        }
+        if arguments_error:
+            parsed_call["arguments_raw"] = call["raw"]
+            parsed_call["arguments_error"] = arguments_error
+        parsed_calls.append(parsed_call)
     inp, out = int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
     return ModelReply(
         "".join(text_parts) or None,

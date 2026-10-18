@@ -11,6 +11,7 @@ from ..database import Database
 from ..rpc import RpcFault, required
 from ..run_insights import summarize_run_usage
 from ..runtime_policy import RunBudget
+from ..tools.errors import DuplicateToolCall
 from ..util import dumps, loads, now, uid
 from .conversations import ConversationService
 from .runtime_events import RuntimeEventStore
@@ -215,6 +216,8 @@ class RunStore:
                 "SELECT * FROM tool_executions WHERE run_id=? AND call_id=?",
                 (run["id"], call["id"]),
             )
+            if row and (int(row["step"]) != int(step) or str(row["arguments_hash"]) != arguments_hash):
+                raise DuplicateToolCall(f"Tool call id {call['id']} was already used with different arguments or step")
             if row and row["status"] == "retry_approved":
                 await self.db.execute_on(
                     conn,
@@ -238,14 +241,17 @@ class RunStore:
         success: bool,
         output: str,
         error: str | None,
+        error_code: str | None = None,
     ) -> None:
         await self.db.execute_on(
             conn,
-            "UPDATE tool_executions SET status=?,output_hash=?,error=?,finished_at=? WHERE run_id=? AND call_id=?",
+            "UPDATE tool_executions SET status=?,output_hash=?,error=?,error_code=?,finished_at=? "
+            "WHERE run_id=? AND call_id=?",
             (
                 "succeeded" if success else "failed",
                 hashlib.sha256(output.encode("utf-8")).hexdigest(),
                 error,
+                error_code,
                 now(),
                 run_id,
                 call_id,

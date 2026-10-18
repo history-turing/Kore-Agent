@@ -61,7 +61,7 @@ async def test_interrupted_tool_requires_reconciliation_and_is_not_replayed(reco
         await asyncio.Event().wait()
 
     monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
-    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.execute", hanging_tool)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.dispatch", hanging_tool)
 
     task = asyncio.create_task(app._execute_run(run))
     app.running[run["id"]] = task
@@ -130,7 +130,7 @@ async def test_crash_after_assistant_message_resumes_tools_without_model_replay(
 
     monkeypatch.setattr(app.runs, "begin_tool", original_begin_tool)
     monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", final_complete)
-    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.execute", successful_tool)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.dispatch", successful_tool)
     recovered = await app.run_recover({"run_id": run["id"]})
     assert recovered["result"]["final_message"]["content"] == "done"
     assert model_calls == 2
@@ -315,7 +315,7 @@ async def test_large_tool_result_is_offloaded_before_the_model_sees_it(recovery_
         return "x" * 70_000
 
     monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
-    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.execute", large_tool)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.dispatch", large_tool)
     await app._execute_run(run)
 
     messages = (await app.conversation_get({"conversation_id": conversation["id"]}))["messages"]
@@ -343,7 +343,7 @@ async def _interrupt_during_tool(app: Application, monkeypatch, run: dict, tool)
         return await tool(*args, **kwargs)
 
     monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
-    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.execute", wrapped_tool)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.dispatch", wrapped_tool)
     task = asyncio.create_task(app._execute_run(run))
     app.running[run["id"]] = task
     await asyncio.wait_for(started.wait(), 5)

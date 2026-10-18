@@ -25,7 +25,10 @@ kore_next/
     anthropic_messages.py Anthropic Messages API
   tools/
     definitions.py        工具 schema
-    executor.py           工具激活、审批、文件、Shell 与网络调用
+    projection.py         每个模型步骤的不可变工具可见性投影
+    validation.py         工具参数 JSON Schema 校验
+    errors.py             可回传模型的结构化工具错误
+    executor.py           工具预检、审批、派发、文件、Shell 与网络调用
     shell.py              Shell argv 构造
   services/
     conversations.py      会话持久化与搜索
@@ -89,6 +92,8 @@ automation tick
 - `model/` 只负责协议请求、流式响应和 usage 归一化。
 - `tools/` 只负责工具声明、参数校验和单次执行，不直接写业务表。
 - `services/` 拥有各自的数据表和业务状态；跨服务调用通过构造参数暴露的明确依赖完成。
+- 工具调用按 `preflight -> T1 dispatch -> execute -> T2 result` 排序；参数、可见性和人工审批全部通过后才写入 `dispatched`。
+- `ToolProjection` 在每次模型请求前冻结当前可见工具集合；`tool_catalog` 的激活只影响下一个模型步骤。
 - 新代码直接导入 `kore_next.model`、`kore_next.tools` 和 `kore_next.services`，不再保留额外的旧路径兼容层。
 - 前后端共享的是 RPC 方法名和 JSON 字段，不共享 Python 或 TypeScript 对象。
 
@@ -110,6 +115,8 @@ automation tick
 `runtime_projections.py` 提供纯函数式的消息与终态投影。投影只读取事件，不修改事件历史；工具执行状态由 `tool_executions` 表持久化，派发和结果分别提交。
 
 检查点现在同时记录 `through_event_seq` 和前缀 digest。恢复时先校验事件前缀，再只应用水位线之后的模型可见事件；恢复出的新 Run 拥有独立事件序列，继承的是物化状态而不是旧 Run 的序号。检查点与日志不一致时会拒绝自动恢复。
+
+工具可见性按模型步骤记录在 `tool_activation_steps` 中，避免同一批次里 `tool_catalog` 激活后立即调用尚未看到 Schema 的工具。参数在派发前按 JSON Schema 校验；校验失败或人工拒绝都不会写入 `dispatched`，`tool_executions.error_code` 记录稳定错误码。
 
 上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。
 
