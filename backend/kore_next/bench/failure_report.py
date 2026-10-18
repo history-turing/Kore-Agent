@@ -33,9 +33,16 @@ def build_report(
     resolved = set(evaluation.get("resolved_ids") or [])
     unresolved = set(evaluation.get("unresolved_ids") or [])
     empty = set(evaluation.get("empty_patch_ids") or [])
-    rows = []
+    order: list[str] = []
+    latest: dict[str, dict[str, Any]] = {}
     for result in summaries:
         instance_id = str(result.get("instance_id"))
+        if instance_id not in latest:
+            order.append(instance_id)
+        latest[instance_id] = result
+    rows = []
+    for instance_id in order:
+        result = latest[instance_id]
         if instance_id in resolved:
             outcome = "resolved"
         elif instance_id in unresolved:

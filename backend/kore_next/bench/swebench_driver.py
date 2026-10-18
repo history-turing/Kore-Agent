@@ -458,6 +458,10 @@ def _event_summary(path: Path) -> dict[str, Any]:
             first_edit_step = event.get("step")
         elif kind == "agent_completed":
             final_message = str((event.get("message") or {}).get("content") or "")
+        elif kind in {"run_budget_warning", "run_budget_finalizing", "run_budget_exceeded"}:
+            chargeable = event.get("run_budget_chargeable_tokens")
+            if chargeable is not None:
+                tokens = max(tokens, int(chargeable))
         usage = event.get("usage")
         if isinstance(usage, dict) and usage.get("total_tokens"):
             tokens = max(tokens, int(usage["total_tokens"]))
