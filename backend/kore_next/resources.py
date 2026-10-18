@@ -62,7 +62,7 @@ class ResourceAuthority:
         self._paths: dict[str, _ReadWriteLock] = {}
         self._serial: dict[str, asyncio.Lock] = {}
         self._semaphores: dict[str, asyncio.Semaphore] = {}
-        self._workspace = _ReadWriteLock()
+        self._workspaces: dict[str, _ReadWriteLock] = {}
 
     @staticmethod
     def canonical_path(path: Path) -> str:
@@ -78,15 +78,20 @@ class ResourceAuthority:
     def _semaphore(self, name: str, capacity: int) -> asyncio.Semaphore:
         return self._semaphores.setdefault(name, asyncio.Semaphore(capacity))
 
+    def _workspace_lock(self, workspace: Path | None) -> _ReadWriteLock:
+        key = self.canonical_path(workspace) if workspace is not None else "__no_workspace__"
+        return self._workspaces.setdefault(key, _ReadWriteLock())
+
     @asynccontextmanager
     async def guard(
         self,
         tool_name: str,
         *,
         path: Path | None = None,
+        workspace: Path | None = None,
     ) -> AsyncIterator[None]:
         if tool_name == "shell":
-            async with self._workspace.write():
+            async with self._workspace_lock(workspace).write():
                 yield
             return
         if tool_name.startswith("computer_"):
@@ -104,7 +109,7 @@ class ResourceAuthority:
             return
         if path is not None:
             lock = self._path_lock(path)
-            async with self._workspace.read():
+            async with self._workspace_lock(workspace).read():
                 if tool_name == "write_file":
                     async with lock.write():
                         yield

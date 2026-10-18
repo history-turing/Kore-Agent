@@ -21,6 +21,7 @@ from ..config import Settings
 from ..mcp import McpManager, McpToolError
 from ..resources import ResourceAuthority
 from ..sandbox import SandboxSupervisor
+from ..workspace import WorkspaceContext
 from .catalog import ToolCatalog
 from .definitions import CORE_TOOLS, PLAN_ALLOWED_TOOLS, builtin_tool_definitions
 from .errors import (
@@ -30,6 +31,7 @@ from .errors import (
     ToolForbidden,
     ToolNotActive,
     ToolNotVisibleYet,
+    WorkspaceRequired,
 )
 from .policies import shell_policy_violation
 from .program import run_program
@@ -80,6 +82,15 @@ PERSISTENT_SERVICE_TOOLS = {
     "automation_cancel",
 }
 
+WORKSPACE_TOOLS = {
+    "list_files",
+    "program",
+    "publish_file",
+    "read_file",
+    "shell",
+    "write_file",
+}
+
 
 def _search_result_url(raw: str) -> str | None:
     """Return an HTTP result URL, unwrapping DuckDuckGo's redirect links."""
@@ -124,6 +135,7 @@ class ToolExecutor:
         computer: ComputerClient,
         services: Any | None = None,
         resources: ResourceAuthority | None = None,
+        workspace: WorkspaceContext | None = None,
     ):
         self.settings = settings
         self.approve = approve
@@ -133,7 +145,11 @@ class ToolExecutor:
         self.computer = computer
         self.services = services
         self.resources = resources or ResourceAuthority()
-        self.sandbox = SandboxSupervisor(settings.workspace_dir)
+        self.workspace = workspace or WorkspaceContext(
+            root=settings.workspace_dir.resolve(),
+            source="legacy_default",
+        )
+        self.sandbox = SandboxSupervisor(self.workspace.root) if self.workspace.root is not None else None
         # Activation is monotonic within a run: name -> first model step where
         # the tool schema becomes visible.
         self.activation_steps: dict[str, int] = {}
@@ -151,7 +167,14 @@ class ToolExecutor:
 
     def _definition_groups(self, mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         builtin = builtin_tool_definitions(mode, web_tools=self.settings.web_tools_enabled)
-        extra = [] if mode == "plan" else [*self.mcp.tool_definitions(), *self.computer.tool_definitions()]
+        if not self.workspace.available:
+            builtin = [definition for definition in builtin if definition["function"]["name"] not in WORKSPACE_TOOLS]
+        if mode == "plan":
+            extra = []
+        elif self.workspace.available:
+            extra = [*self.mcp.tool_definitions(), *self.computer.tool_definitions()]
+        else:
+            extra = self.computer.tool_definitions()
         return builtin, extra
 
     def _available_definitions(self, mode: str) -> list[dict[str, Any]]:
@@ -217,6 +240,8 @@ class ToolExecutor:
     def resolve(self, raw: str) -> Path:
         # Container-backed benchmarks address the repository as /testbed. The
         # host workspace is the same directory through the bind mount.
+        if self.sandbox is None:
+            raise WorkspaceRequired("Attach a workspace before using filesystem tools")
         value = raw.strip()
         if value == "/testbed":
             value = "."
@@ -258,14 +283,20 @@ class ToolExecutor:
         validate_arguments(definition, arguments)
         path = None
         if name in {"read_file", "write_file", "publish_file"}:
+            if not self.workspace.available:
+                raise WorkspaceRequired(f"Tool {name} requires a workspace")
             path = self.resolve(str(arguments.get("path", "")))
         elif name == "list_files":
+            if not self.workspace.available:
+                raise WorkspaceRequired("Tool list_files requires a workspace")
             path = self.resolve(str(arguments.get("path") or "."))
         elif name == "artifact_publish":
             path_value, url_value = arguments.get("path"), arguments.get("url")
             if bool(path_value) == bool(url_value):
                 raise ToolArgumentError("Provide exactly one of path or url")
             if path_value:
+                if not self.workspace.available:
+                    raise WorkspaceRequired("Publishing a workspace file requires a workspace")
                 path = self.resolve(str(path_value))
             else:
                 await self._validate_public_url(str(url_value))
@@ -330,7 +361,11 @@ class ToolExecutor:
         return await prepared.dispatch()
 
     async def dispatch(self, prepared: PreparedToolCall) -> str:
-        async with self.resources.guard(prepared.name, path=prepared.path):
+        async with self.resources.guard(
+            prepared.name,
+            path=prepared.path,
+            workspace=self.workspace.root,
+        ):
             return await self._dispatch_unlocked(prepared)
 
     async def _dispatch_unlocked(self, prepared: PreparedToolCall) -> str:
@@ -382,7 +417,9 @@ class ToolExecutor:
             entries = []
             for item in sorted(path.iterdir())[:500]:
                 suffix = "/" if item.is_dir() else ""
-                entries.append(str(item.relative_to(self.settings.workspace_dir)) + suffix)
+                if self.workspace.root is None:
+                    raise WorkspaceRequired("Tool list_files requires a workspace")
+                entries.append(str(item.relative_to(self.workspace.root)) + suffix)
             return "\n".join(entries)
         if name == "write_file":
             path = prepared.path or self.resolve(str(arguments.get("path", "")))
@@ -411,9 +448,7 @@ class ToolExecutor:
             )
             output = result.stdout + (f"\n[stderr]\n{result.stderr}" if result.stderr else "")
             output_limit = (
-                max(1000, self.settings.benchmark_shell_output_limit)
-                if self.settings.benchmark_mode
-                else 40_000
+                max(1000, self.settings.benchmark_shell_output_limit) if self.settings.benchmark_mode else 40_000
             )
             return f"exit_code={result.returncode}\n{output[-output_limit:]}"
         if name == "get_current_time":
@@ -445,6 +480,7 @@ class ToolExecutor:
                 title=str(arguments.get("title", path.name)),
                 description=arguments.get("description"),
                 run_id=run_id,
+                workspace_root=self.workspace.root,
             )
             return f"Published artifact {artifact['id']}"
         if name == "artifact_publish":
@@ -456,6 +492,7 @@ class ToolExecutor:
                     title=str(arguments.get("title") or Path(str(path_value)).name),
                     description=arguments.get("description"),
                     run_id=run_id,
+                    workspace_root=self.workspace.root,
                 )
             else:
                 artifact = await self.services.publish_url_artifact(

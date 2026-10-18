@@ -68,7 +68,9 @@ async def run_program(
     if len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
         raise ToolError("program source is too large", code="invalid_arguments")
     worker = Path(__file__).with_name("program_worker.py")
-    workspace = Path(executor.settings.workspace_dir)
+    if executor.workspace.root is None:
+        raise ToolError("Program execution requires a workspace", code="workspace_required")
+    workspace = Path(executor.workspace.root)
     workspace.mkdir(parents=True, exist_ok=True)
     env = executor.sandbox.clean_environment({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
     try:

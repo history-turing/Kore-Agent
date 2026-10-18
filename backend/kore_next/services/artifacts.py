@@ -33,10 +33,18 @@ class ArtifactService:
         self._broadcast = broadcast
         self.get_run = get_run
 
-    async def publish(self, *, path: Path, title: str, description: str | None, run_id: str) -> dict[str, Any]:
+    async def publish(
+        self,
+        *,
+        path: Path,
+        title: str,
+        description: str | None,
+        run_id: str,
+        workspace_root: Path | None = None,
+    ) -> dict[str, Any]:
         settings = self._settings()
         path = path.resolve()
-        path.relative_to(settings.workspace_dir.resolve())
+        path.relative_to((workspace_root or settings.workspace_dir).resolve())
         if not path.is_file():
             raise FileNotFoundError(path)
         if path.stat().st_size > 100 * 1024 * 1024:

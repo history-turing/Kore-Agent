@@ -25,6 +25,7 @@ from ..tasks import TaskService
 from ..tools import ToolError, ToolExecutor, ToolProjection
 from ..tools.policies import CONCURRENT_READ_TOOLS, is_mutating_tool, tool_policy
 from ..util import dumps, now, uid
+from ..workspace import WorkspaceContext, WorkspaceError, resolve_workspace
 from .approvals import ApprovalService
 from .artifacts import ArtifactService
 from .conversations import ConversationService
@@ -115,6 +116,8 @@ class RunEngine:
         try:
             model_config = await self.model_settings.active_config()
             model = ModelClient(settings, model_config)
+            conversation = await self.conversations.get({"conversation_id": run["conversation_id"]})
+            workspace = await self._resolve_run_workspace(run, conversation["conversation"])
             if recovery_state:
                 # Recovery resumes from model-facing messages and cumulative usage,
                 # so the new run inherits its predecessor's budget and tool state.
@@ -137,9 +140,9 @@ class RunEngine:
                     recovered_from_run_id=run.get("recovered_from_run_id"),
                 )
             else:
-                history = (await self.conversations.get({"conversation_id": run["conversation_id"]}))["messages"]
+                history = conversation["messages"]
                 prepared_history = self.history_for_model(history)
-                base_system = self.system_prompt(run["mode"])
+                base_system = self.system_prompt(run["mode"], workspace)
                 decision = await self.context.prepare(
                     conversation_id=run["conversation_id"],
                     history=prepared_history,
@@ -173,6 +176,7 @@ class RunEngine:
                 self._computer(),
                 self.tool_router,
                 self.resources,
+                workspace,
             )
             if recovery_state:
                 activation_steps = recovery_state.get("tool_activation_steps")
@@ -632,6 +636,25 @@ class RunEngine:
         post_run = asyncio.create_task(self.post_run(run, result))
         self.track_background(post_run)
         return result
+
+    async def _resolve_run_workspace(
+        self,
+        run: dict[str, Any],
+        conversation: dict[str, Any],
+    ) -> WorkspaceContext:
+        workspace_path = run.get("workspace_path") or conversation.get("workspace_path")
+        source = run.get("workspace_source") or ("conversation" if workspace_path else "none")
+        if source not in {"conversation", "run_override", "legacy_default"}:
+            source = "conversation" if workspace_path else "none"
+        try:
+            workspace = resolve_workspace(workspace_path, source=source)
+        except WorkspaceError as exc:
+            raise RpcFault(-32001, f"Workspace is unavailable: {exc}") from exc
+        if run.get("workspace_path") != workspace.path or run.get("workspace_source") != workspace.source:
+            run["workspace_path"] = workspace.path
+            run["workspace_source"] = workspace.source
+            await self.runs.set_workspace(run["id"], workspace.path, workspace.source)
+        return workspace
 
     async def _call_model_step(
         self,
@@ -1125,7 +1148,7 @@ class RunEngine:
         return result
 
     @staticmethod
-    def system_prompt(mode: str) -> str:
+    def system_prompt(mode: str, workspace: WorkspaceContext | None = None) -> str:
         common = (
             "You are KoreAgent Next, a reliable local AI agent. Work toward the user's actual result, "
             "use tools when useful, keep durable task state current, publish deliverables, and never "
@@ -1133,6 +1156,16 @@ class RunEngine:
             "Use tool_catalog to discover and activate optional capabilities before calling them; "
             "newly activated tools become callable on the next model step."
         )
+        if workspace is not None and workspace.root is not None:
+            common += (
+                f" The active workspace is {workspace.root}. Resolve relative paths inside it and do not "
+                "assume access outside that root."
+            )
+        else:
+            common += (
+                " No workspace is attached. Filesystem and shell tools are unavailable in this run; "
+                "ask the user to attach a folder when file access is required."
+            )
         if mode == "plan":
             return common + (
                 " You are in PLAN MODE. Inspect and research only. Do not perform side effects. "

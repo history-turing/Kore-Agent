@@ -137,6 +137,12 @@ class RunStore:
                 await self.db.execute_on(conn, occurrence_sql, (run["status"], run["id"]))
         await self._broadcast()("run.status", {"run_id": run["id"], "status": run["status"]})
 
+    async def set_workspace(self, run_id: str, workspace_path: str | None, workspace_source: str) -> None:
+        await self.db.execute(
+            "UPDATE runs SET workspace_path=?,workspace_source=? WHERE id=?",
+            (workspace_path, workspace_source, run_id),
+        )
+
     async def event(self, run: dict[str, Any], kind: str, *, conn: Any | None = None, **data: Any) -> dict[str, Any]:
         if conn is not None:
             return await self._event_on(conn, run, kind, **data)

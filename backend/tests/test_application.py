@@ -210,7 +210,7 @@ async def test_model_requests_are_durable_and_tool_activation_survives_checkpoin
 
 
 async def test_empty_tool_output_is_sent_to_model_as_non_empty_content(app, monkeypatch):
-    conversation = (await app.conversation_create({}))["conversation"]
+    conversation = (await app.conversation_create({"workspace_path": str(app.settings.workspace_dir)}))["conversation"]
     await app.conversations.add_message(conversation["id"], {"role": "user", "content": "List files"})
     run = await app.runs.create(conversation["id"], "List files", "normal")
     calls = []

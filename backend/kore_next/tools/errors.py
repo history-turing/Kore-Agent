@@ -64,3 +64,7 @@ class DuplicateToolCall(ToolError):
 
 class ToolUnavailable(ToolError):
     code = "unavailable"
+
+
+class WorkspaceRequired(ToolError):
+    code = "workspace_required"

@@ -61,7 +61,7 @@ async def program_app(tmp_path, monkeypatch):
 
 
 async def _run(app: Application):
-    conversation = (await app.conversation_create({}))["conversation"]
+    conversation = (await app.conversation_create({"workspace_path": str(app.settings.workspace_dir)}))["conversation"]
     await app.conversations.add_message(conversation["id"], {"role": "user", "content": "run a program"})
     return await app.runs.create(conversation["id"], "run a program", "normal")
 
