@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, Notification, ipcMain, shell } from 'electron'
 import path from 'node:path'
 
 app.setName('KoreAgent Next')
@@ -62,6 +62,13 @@ app.whenReady().then(() => {
   ipcMain.handle('notify', (_e, title: string, body: string) => new Notification({ title, body }).show())
   ipcMain.handle('show-approval', () => showApprovalWindow())
   ipcMain.handle('hide-approval', () => approvalWindow?.hide())
+  ipcMain.handle('choose-workspace', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择 Agent 工作区',
+      properties: ['openDirectory'],
+    })
+    return result.canceled ? null : result.filePaths[0] || null
+  })
   createWindow()
   app.on('activate', () => {
     if (!BrowserWindow.getAllWindows().length) createWindow()

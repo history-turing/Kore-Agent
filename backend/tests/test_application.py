@@ -58,6 +58,7 @@ def test_rpc_contract_contains_expected_methods(app):
         "conversation.search",
         "conversation.list",
         "conversation.rename",
+        "conversation.set_workspace",
         "conversation.send",
         "extension.import.apply",
         "extension.import.preview",
@@ -87,6 +88,7 @@ def test_rpc_contract_contains_expected_methods(app):
         "task.plan_accept",
         "task.plan_reject",
         "trace.get",
+        "workspace.validate",
     }
     assert set(app.methods()) == expected
 
@@ -136,7 +138,7 @@ async def test_conversation_workspace_binding_is_optional_and_persisted(app, tmp
     )
 
     updated = (
-        await app.conversations.set_workspace(
+        await app.conversation_set_workspace(
             {
                 "conversation_id": bound["id"],
                 "workspace_path": None,
@@ -144,6 +146,31 @@ async def test_conversation_workspace_binding_is_optional_and_persisted(app, tmp
         )
     )["conversation"]
     assert updated["workspace_path"] is None
+
+
+async def test_workspace_rpc_validates_and_applies_run_override(app, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    validated = await app.workspace_validate({"path": str(project)})
+    assert validated["workspace"]["path"] == str(project.resolve())
+    assert validated["workspace"]["writable"] is True
+    with pytest.raises(RpcFault, match="absolute"):
+        await app.workspace_validate({"path": "relative"})
+
+    conversation = (await app.conversation_create({}))["conversation"]
+    response = await app.conversation_send(
+        {
+            "conversation_id": conversation["id"],
+            "content": "temporary project",
+            "mode": "normal",
+            "workspace_path": str(project),
+        }
+    )
+    assert response["run"]["workspace_path"] == str(project.resolve())
+    assert response["run"]["workspace_source"] == "run_override"
+    assert (await app.conversation_get({"conversation_id": conversation["id"]}))["conversation"][
+        "workspace_path"
+    ] is None
 
 
 async def test_run_records_effective_workspace_snapshot(app, tmp_path):

@@ -6,6 +6,7 @@ declare global {
       notify(title: string, body: string): Promise<void>
       showApproval(): Promise<void>
       hideApproval(): Promise<void>
+      chooseWorkspace(): Promise<string | null>
     }
   }
 }

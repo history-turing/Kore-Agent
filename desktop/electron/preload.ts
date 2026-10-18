@@ -4,4 +4,5 @@ contextBridge.exposeInMainWorld('koreNext', {
   notify: (title: string, body: string) => ipcRenderer.invoke('notify', title, body),
   showApproval: () => ipcRenderer.invoke('show-approval'),
   hideApproval: () => ipcRenderer.invoke('hide-approval'),
+  chooseWorkspace: () => ipcRenderer.invoke('choose-workspace'),
 })

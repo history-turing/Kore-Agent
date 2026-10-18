@@ -84,7 +84,7 @@ function PreferencesView() {
               <dd>{info.data?.version}</dd>
               <dt>数据库</dt>
               <dd className="mono">{info.data?.database}</dd>
-              <dt>工作区</dt>
+              <dt>默认工作区</dt>
               <dd className="mono">{info.data?.workspace}</dd>
               <dt>RPC 方法</dt>
               <dd>{info.data?.rpc_methods?.length || 0}</dd>

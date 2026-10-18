@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -37,6 +38,7 @@ from .services.skills import SkillService
 from .services.tool_router import ServiceToolRouter
 from .skill_learning import SkillLearningService
 from .tasks import TaskService
+from .workspace import WorkspaceError, resolve_workspace
 
 Broadcaster = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -255,6 +257,7 @@ class Application:
             "conversation.get": self.conversation_get,
             "conversation.search": self.conversation_search,
             "conversation.create": self.conversation_create,
+            "conversation.set_workspace": self.conversation_set_workspace,
             "conversation.send": self.conversation_send,
             "conversation.rename": self.conversation_rename,
             "conversation.delete": self.conversation_delete,
@@ -295,6 +298,7 @@ class Application:
             "mcp.add": self.mcp_add,
             "mcp.set_enabled": self.mcp_set_enabled,
             "mcp.delete": self.mcp_delete,
+            "workspace.validate": self.workspace_validate,
         }
 
     async def system_info(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -364,7 +368,30 @@ class Application:
         return await self.conversations.search(params)
 
     async def conversation_create(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.conversations.create(params)
+        try:
+            return await self.conversations.create(params)
+        except WorkspaceError as exc:
+            raise RpcFault(-32602, str(exc)) from exc
+
+    async def conversation_set_workspace(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await self.conversations.set_workspace(params)
+        except WorkspaceError as exc:
+            raise RpcFault(-32602, str(exc)) from exc
+
+    async def workspace_validate(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            workspace = resolve_workspace(params.get("path"))
+        except WorkspaceError as exc:
+            raise RpcFault(-32602, str(exc)) from exc
+        return {
+            "workspace": {
+                "path": workspace.path,
+                "name": workspace.name,
+                "available": workspace.available,
+                "writable": bool(workspace.root and os.access(workspace.root, os.W_OK)),
+            }
+        }
 
     async def conversation_rename(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.conversations.rename(params)
@@ -378,9 +405,22 @@ class Application:
         if mode not in {"normal", "plan"}:
             raise RpcFault(-32602, "mode must be normal or plan")
         await self.conversations.require(cid)
+        workspace = None
+        if params.get("workspace_path"):
+            try:
+                workspace = resolve_workspace(params["workspace_path"], source="run_override")
+            except WorkspaceError as exc:
+                raise RpcFault(-32602, str(exc)) from exc
         async with self.runs.transaction() as conn:
             await self.conversations.add_message(cid, {"role": "user", "content": content}, conn=conn)
-            run = await self.runs.create(cid, content, mode, conn=conn)
+            run = await self.runs.create(
+                cid,
+                content,
+                mode,
+                conn=conn,
+                workspace_path=workspace.path if workspace else None,
+                workspace_source="run_override" if workspace else "none",
+            )
             user_event = await self.runs.event(
                 run,
                 "user_message",

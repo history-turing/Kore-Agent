@@ -244,6 +244,39 @@ main {
 .workspace-head small {
   color: var(--muted);
 }
+.workspace-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 5px;
+  flex-wrap: wrap;
+}
+.workspace-line button {
+  border: 0;
+  background: transparent;
+  color: #52657e;
+  padding: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+.workspace-line button:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.workspace-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #e9f0f8;
+  color: #52657e;
+  font-size: 11px;
+}
 .icon {
   padding: 7px;
 }
@@ -333,6 +366,27 @@ main {
 .composer-row {
   display: flex;
   justify-content: space-between;
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.workspace-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #d5deea;
+  background: #f8fafd;
+  color: #52657e;
+  border-radius: 7px;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+.workspace-run.active {
+  border-color: #9ab0ca;
+  background: #e9f0f8;
+  color: var(--ink);
 }
 .composer-row select {
   border: 0;

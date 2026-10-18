@@ -6,6 +6,7 @@ import {
   Bot,
   ChevronRight,
   FileOutput,
+  FolderOpen,
   Menu,
   MessageSquare,
   PauseCircle,
@@ -44,6 +45,7 @@ export function Chat({
   const [selected, setSelected] = useState('')
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<'normal' | 'plan'>('normal')
+  const [runWorkspace, setRunWorkspace] = useState<string | null>(null)
   const [live, setLive] = useState<LiveRunState | null>(null)
   const liveRef = useRef<LiveRunState | null>(null)
   useEffect(() => {
@@ -60,6 +62,7 @@ export function Chat({
   }, [initialConversationId])
   useEffect(() => {
     setLive(null)
+    setRunWorkspace(null)
   }, [selected])
   useEffect(() => {
     if (requestedMode) setMode(requestedMode)
@@ -89,6 +92,7 @@ export function Chat({
         conversation_id: selected,
       }),
   })
+  const conversationWorkspace = detail.data?.conversation.workspace_path || null
   const tasks = useQuery({
     queryKey: ['tasks', selected],
     enabled: !!selected,
@@ -173,8 +177,13 @@ export function Chat({
     refetchInterval: 15000,
   })
   const send = useMutation({
-    mutationFn: ({ id, text }: { id: string; text: string }) =>
-      rpc.call<any>('conversation.send', { conversation_id: id, content: text, mode }),
+    mutationFn: ({ id, text, workspacePath }: { id: string; text: string; workspacePath: string | null }) =>
+      rpc.call<any>('conversation.send', {
+        conversation_id: id,
+        content: text,
+        mode,
+        ...(workspacePath ? { workspace_path: workspacePath } : {}),
+      }),
     onMutate: () => {
       setLive({ runId: '', content: '', reasoning: '', tools: [], toolActivity: [], status: 'starting' })
       setPlanTaskId(null)
@@ -189,8 +198,20 @@ export function Chat({
         qc.invalidateQueries({ queryKey: ['artifacts', selected] }),
       ])
       setLive(null)
+      setRunWorkspace(null)
     },
     onError: () => setLive(null),
+  })
+  const workspace = useMutation({
+    mutationFn: (workspacePath: string | null) =>
+      rpc.call('conversation.set_workspace', {
+        conversation_id: selected,
+        workspace_path: workspacePath,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['conversation', selected] })
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+    },
   })
   useEffect(
     () =>
@@ -252,7 +273,19 @@ export function Chat({
   })
   const submit = () => {
     const text = input.trim()
-    if (selected && text && !send.isPending) send.mutate({ id: selected, text })
+    if (selected && text && !send.isPending) send.mutate({ id: selected, text, workspacePath: runWorkspace })
+  }
+  const pickWorkspace = async () => {
+    if (window.koreNext?.chooseWorkspace) return window.koreNext.chooseWorkspace()
+    return window.prompt('输入工作区绝对路径')?.trim() || null
+  }
+  const bindWorkspace = async () => {
+    const path = await pickWorkspace()
+    if (path) workspace.mutate(path)
+  }
+  const chooseRunWorkspace = async () => {
+    const path = await pickWorkspace()
+    if (path) setRunWorkspace(path)
   }
   const pin = (id: string) => {
     const next = pinned.includes(id) ? pinned.filter((item) => item !== id) : [...pinned, id]
@@ -343,6 +376,31 @@ export function Chat({
                         ? 'Agent 正在工作'
                         : `${tasks.data?.filter((item) => ['active', 'blocked'].includes(item.status)).length || 0} 个持续任务`}
                     </small>
+                    <div className="workspace-line">
+                      <span
+                        className="workspace-tag"
+                        title={conversationWorkspace || '仅聊天，不使用文件工具'}
+                      >
+                        <FolderOpen size={12} />
+                        {conversationWorkspace ? workspaceName(conversationWorkspace) : '未绑定工作区'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void bindWorkspace()}
+                        disabled={workspace.isPending}
+                      >
+                        {conversationWorkspace ? '更换' : '绑定目录'}
+                      </button>
+                      {conversationWorkspace && (
+                        <button
+                          type="button"
+                          onClick={() => workspace.mutate(null)}
+                          disabled={workspace.isPending}
+                        >
+                          解除
+                        </button>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -430,6 +488,7 @@ export function Chat({
               />
             )}{' '}
             {send.error && <ErrorBox error={send.error} />}{' '}
+            {workspace.error && <ErrorBox error={workspace.error} />}{' '}
             {recover.error && <ErrorBox error={recover.error} />}
             {resolveTool.error && <ErrorBox error={resolveTool.error} />}
             <div className="composer">
@@ -446,14 +505,35 @@ export function Chat({
                 aria-label="消息内容"
               />
               <div className="composer-row">
-                <select
-                  aria-label="运行模式"
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value as 'normal' | 'plan')}
-                >
-                  <option value="normal">执行模式</option>
-                  <option value="plan">计划模式</option>
-                </select>
+                <div className="composer-actions">
+                  <select
+                    aria-label="运行模式"
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value as 'normal' | 'plan')}
+                  >
+                    <option value="normal">执行模式</option>
+                    <option value="plan">计划模式</option>
+                  </select>
+                  <button
+                    type="button"
+                    className={`workspace-run ${runWorkspace ? 'active' : ''}`}
+                    title={runWorkspace || '仅本次运行使用另一个目录'}
+                    onClick={() => void chooseRunWorkspace()}
+                  >
+                    <FolderOpen size={13} />
+                    {runWorkspace ? workspaceName(runWorkspace) : '仅本次目录'}
+                  </button>
+                  {runWorkspace && (
+                    <button
+                      type="button"
+                      className="icon"
+                      aria-label="取消本次目录"
+                      onClick={() => setRunWorkspace(null)}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
                 <button className="primary" disabled={!input.trim() || send.isPending} onClick={submit}>
                   {send.isPending ? '运行中' : '发送'}
                 </button>
@@ -565,6 +645,15 @@ function TaskPanel({
     </section>
   )
 }
+function workspaceName(path: string) {
+  return (
+    path
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() || path
+  )
+}
+
 function RenameForm({
   initial,
   save,
