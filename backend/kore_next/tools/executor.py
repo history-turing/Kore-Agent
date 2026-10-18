@@ -249,6 +249,8 @@ class ToolExecutor:
             "skill_resource_read",
             "evidence_search",
             "evidence_read",
+            "tool_result_inspect",
+            "tool_result_read",
             "automation_create",
             "automation_list",
             "automation_get",

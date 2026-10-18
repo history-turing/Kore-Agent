@@ -11,6 +11,7 @@ from .computer import ComputerClient
 from .computer_guard import ComputerStagnationGuard
 from .config import Settings
 from .context import ContextManager
+from .context_offload import ContextOffloadStore
 from .database import Database
 from .evidence import EvidenceStore
 from .mcp import McpManager
@@ -59,6 +60,7 @@ class Application:
         self.mcp_manager = McpManager(self.settings.workspace_dir)
         self.computer = ComputerClient(self.settings, self._store_observation)
         self.context_manager = ContextManager(self.db)
+        self.context_offload = ContextOffloadStore(self.db, self.settings.data_dir / "context-offload")
         self.checkpoints = CheckpointStore(self.db)
         self.memory_service = MemoryService(self.db)
         self.task_service = TaskService(self.db)
@@ -152,6 +154,7 @@ class Application:
             self.skill_service,
             self.automations,
             self.artifacts,
+            self.context_offload,
         )
         self.run_post_processor = RunPostProcessor(
             settings=lambda: self.settings,
@@ -169,6 +172,7 @@ class Application:
             runs=self.runs,
             context=self.context_manager,
             checkpoints=self.checkpoints,
+            offload=self.context_offload,
             memory=self.memory_service,
             tasks=self.task_service,
             evidence=self.evidence,

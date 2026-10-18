@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..context_offload import ContextOffloadStore
 from ..database import Database
 from ..evidence import EvidenceStore
 from ..memory import MemoryService
@@ -29,6 +30,7 @@ class ServiceToolRouter:
         skills: SkillService,
         automations: AutomationService,
         artifacts: ArtifactService,
+        offload: ContextOffloadStore,
     ):
         self.db = db
         self.conversations = conversations
@@ -39,6 +41,7 @@ class ServiceToolRouter:
         self.skills = skills
         self.automations = automations
         self.artifacts = artifacts
+        self.offload = offload
 
     async def publish_url_artifact(
         self, *, url: str, title: str, description: str | None, run_id: str
@@ -51,6 +54,14 @@ class ServiceToolRouter:
     async def call(self, name: str, arguments: dict[str, Any], *, run_id: str, mode: str) -> Any:
         run = (await self.runs.get({"run_id": run_id}))["run"]
         conversation_id = run.get("conversation_id")
+        if name == "tool_result_inspect":
+            return await self.offload.inspect(str(required(arguments, "sha256")))
+        if name == "tool_result_read":
+            return await self.offload.read(
+                str(required(arguments, "sha256")),
+                offset=max(0, int(arguments.get("offset", 0))),
+                limit=max(1, min(int(arguments.get("limit", 4_000)), 16_000)),
+            )
         if name == "history_search":
             query = str(required(arguments, "query"))
             limit = max(1, min(int(arguments.get("limit", 20)), 100))

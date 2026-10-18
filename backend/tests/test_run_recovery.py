@@ -286,3 +286,41 @@ async def test_snapshot_replays_tail_without_model_call(recovery_app, monkeypatc
     monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", unexpected_complete)
     recovered = await app.run_recover({"run_id": run["id"]})
     assert recovered["result"]["final_message"]["content"] == "from the tail"
+
+
+async def test_large_tool_result_is_offloaded_before_the_model_sees_it(recovery_app, monkeypatch):
+    app = recovery_app
+    conversation, run = await _conversation_and_run(app)
+    calls = 0
+
+    async def fake_complete(_self, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ModelReply(
+                content="",
+                reasoning=None,
+                tool_calls=[{"id": "call-1", "name": "task_list", "arguments": {}}],
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+        return ModelReply(
+            content="done",
+            reasoning=None,
+            tool_calls=[],
+            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        )
+
+    async def large_tool(*_args, **_kwargs):
+        return "x" * 70_000
+
+    monkeypatch.setattr("kore_next.services.run_engine.ModelClient.complete", fake_complete)
+    monkeypatch.setattr("kore_next.tools.executor.ToolExecutor.execute", large_tool)
+    await app._execute_run(run)
+
+    messages = (await app.conversation_get({"conversation_id": conversation["id"]}))["messages"]
+    tool_message = next(message for message in messages if message["role"] == "tool")
+    assert tool_message["content"].startswith("[tool result archived")
+    row = await app.db.fetchone("SELECT sha256,size_bytes FROM context_offloads")
+    assert row["size_bytes"] == 70_000
+    chunk = await app.context_offload.read(row["sha256"], limit=5)
+    assert chunk["content"] == "xxxxx"

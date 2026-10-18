@@ -12,6 +12,7 @@ from ..computer import ComputerClient
 from ..computer_guard import ComputerStagnationGuard
 from ..config import Settings
 from ..context import ContextDecision, ContextManager
+from ..context_offload import ContextOffloadStore
 from ..evidence import EvidenceStore
 from ..mcp import McpManager, McpToolError
 from ..memory import MemoryService
@@ -54,6 +55,7 @@ class RunEngine:
         runs: RunStore,
         context: ContextManager,
         checkpoints: CheckpointStore,
+        offload: ContextOffloadStore,
         memory: MemoryService,
         tasks: TaskService,
         evidence: EvidenceStore,
@@ -76,6 +78,7 @@ class RunEngine:
         self.runs = runs
         self.context = context
         self.checkpoints = checkpoints
+        self.offload = offload
         self.memory = memory
         self.tasks = tasks
         self.evidence = evidence
@@ -820,6 +823,19 @@ class RunEngine:
         except Exception as exc:
             output, success, error = "", False, str(exc)
         output_text = output if isinstance(output, str) else dumps(output)
+        output_ref: dict[str, Any] | None = None
+        model_output = output_text
+        if success and output_text:
+            try:
+                archived = await self.offload.archive(output_text)
+            except Exception:
+                archived = None
+            if archived:
+                output_ref = {
+                    "sha256": archived["sha256"],
+                    "size_bytes": archived["size_bytes"],
+                }
+                model_output = self.offload.placeholder(archived)
         # Repeated computer failures and unchanged observations stop
         # the run before another ineffective action is attempted.
         self.computer_guard.record(
@@ -838,7 +854,7 @@ class RunEngine:
                 pass
         tool_message = {
             "role": "tool",
-            "content": output_text or error,
+            "content": model_output or error,
             "name": call["name"],
             "tool_call_id": call["id"],
         }
@@ -865,7 +881,8 @@ class RunEngine:
                     "tool_call_id": call["id"],
                     "tool_name": call["name"],
                     "success": success,
-                    "output": output_text,
+                    "output": model_output,
+                    "output_ref": output_ref,
                     "error": error,
                     "duration_ms": duration_ms,
                 },
@@ -899,7 +916,8 @@ class RunEngine:
                 "tool_name": call["name"],
                 "arguments": call["arguments"],
                 "success": success,
-                "output": output_text,
+                "output": model_output,
+                "output_ref": output_ref,
                 "error": error,
                 "duration_ms": duration_ms,
                 "task_id": plan_task_id,

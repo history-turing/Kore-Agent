@@ -13,6 +13,8 @@ kore_next/
   runtime_policy.py       运行预算、重复调用保护与终止原因
   evidence.py             工具证据存档、检索与旧格式标记
   checkpoint.py           Run 检查点
+  context_snapshots.py    上下文压缩物化快照
+  context_offload.py      大工具结果的内容寻址归档与有界读取
   database.py             SQLite schema、升级与备份
   model/
     client.py             重试策略、凭据与协议分派
@@ -108,3 +110,5 @@ automation tick
 `runtime_projections.py` 提供纯函数式的消息与终态投影。投影只读取事件，不修改事件历史；工具执行状态由 `tool_executions` 表持久化，派发和结果分别提交。
 
 检查点现在同时记录 `through_event_seq` 和前缀 digest。恢复时先校验事件前缀，再只应用水位线之后的模型可见事件；恢复出的新 Run 拥有独立事件序列，继承的是物化状态而不是旧 Run 的序号。检查点与日志不一致时会拒绝自动恢复。
+
+上下文压缩会把摘要作为 `context_snapshots` 物化快照持久化，记录覆盖的消息数量、源消息 digest 和摘要 hash；原始消息历史不被改写。超过阈值（默认 64KB）的工具结果先写入内容寻址归档，校验写入后模型只看到包含 `sha256`、大小和预览的占位符，需要细节时通过 `tool_result_inspect` / `tool_result_read` 有界读取。

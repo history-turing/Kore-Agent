@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .context_snapshots import ContextSnapshotStore
 from .database import Database
-from .util import now
+from .util import dumps, now
 
 Summarizer = Callable[[str, str | None], Awaitable[str]]
 
@@ -75,6 +77,7 @@ def context_window(provider: str, model: str) -> int:
 class ContextManager:
     def __init__(self, db: Database, *, tool_result_chars: int = 16_000, reserve_tokens: int = 8_192):
         self.db = db
+        self.snapshots = ContextSnapshotStore(db)
         self.tool_result_chars = tool_result_chars
         self.reserve_tokens = reserve_tokens
         self.estimator = TokenEstimator()
@@ -100,8 +103,16 @@ class ContextManager:
         working_input = max(4_096, int(max_input * 0.86))
         tool_result_budget = max(2_048, int(working_input * 0.25))
         summary_key = f"conversation_summary:{conversation_id}"
+        full_history = history
+        snapshot = await self.snapshots.latest(conversation_id)
         saved = await self.db.get_json(summary_key, None)
-        previous_summary = saved.get("summary") if isinstance(saved, dict) else None
+        previous_summary = (
+            snapshot["summary"] if snapshot else (saved.get("summary") if isinstance(saved, dict) else None)
+        )
+        covered = int(snapshot["covered_messages"]) if snapshot else 0
+        if covered:
+            history = self._drop_covered_prefix(full_history, covered)
+            covered = len(full_history) - len(history)
 
         system_parts = [base_system]
         if core_memory.strip():
@@ -163,11 +174,22 @@ class ContextManager:
                 generated = self._fallback_summary(source, previous_summary)
             if generated:
                 previous_summary = generated
+                new_covered = min(len(full_history), covered + len(older))
+                if new_covered > covered:
+                    source_digest = hashlib.sha256(dumps(full_history[:new_covered]).encode("utf-8")).hexdigest()
+                    await self.snapshots.save(
+                        conversation_id=conversation_id,
+                        covered_messages=new_covered,
+                        source_digest=source_digest,
+                        summary=generated,
+                        provider=provider,
+                        model=model,
+                    )
                 await self.db.set_json(
                     summary_key,
                     {
                         "summary": generated,
-                        "covered_messages": len(older),
+                        "covered_messages": new_covered,
                         "updated_at": now(),
                         "provider": provider,
                         "model": model,
@@ -306,6 +328,15 @@ class ContextManager:
         while start < len(messages) and messages[start].get("role") == "tool":
             start += 1
         return start
+
+    @staticmethod
+    def _drop_covered_prefix(messages: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+        if count <= 0 or count >= len(messages):
+            return [] if count >= len(messages) else messages
+        start = count
+        while start < len(messages) and messages[start].get("role") != "user":
+            start += 1
+        return messages[start:]
 
     def _drop_first_round(self, messages: list[dict[str, Any]]) -> None:
         if len(messages) <= 3:

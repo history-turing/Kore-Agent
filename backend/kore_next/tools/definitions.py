@@ -240,6 +240,22 @@ TOOLS.extend(
         ),
         _definition("evidence_read", "Read one evidence record.", {"evidence_id": {"type": "string"}}, ["evidence_id"]),
         _definition(
+            "tool_result_inspect",
+            "Inspect metadata for an archived tool result.",
+            {"sha256": {"type": "string"}},
+            ["sha256"],
+        ),
+        _definition(
+            "tool_result_read",
+            "Read a bounded slice of an archived tool result.",
+            {
+                "sha256": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 16000},
+            },
+            ["sha256"],
+        ),
+        _definition(
             "automation_create",
             "Create a once, interval or cron automation.",
             {
@@ -283,6 +299,8 @@ PLAN_ALLOWED_TOOLS = {
     "task_list",
     "evidence_search",
     "evidence_read",
+    "tool_result_inspect",
+    "tool_result_read",
     "tool_catalog",
 }
 
@@ -297,6 +315,8 @@ CORE_TOOLS = {
     "task_update",
     "task_get",
     "task_list",
+    "tool_result_inspect",
+    "tool_result_read",
     "tool_catalog",
 }
 

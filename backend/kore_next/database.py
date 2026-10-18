@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS checkpoints(
  data_json TEXT NOT NULL, through_event_seq INTEGER NOT NULL DEFAULT 0, digest TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS context_snapshots(
+ id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, covered_messages INTEGER NOT NULL,
+ source_digest TEXT NOT NULL, summary TEXT NOT NULL, summary_hash TEXT NOT NULL,
+ provider TEXT, model TEXT, policy_version INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_snapshots_conversation
+ ON context_snapshots(conversation_id, created_at);
+CREATE TABLE IF NOT EXISTS context_offloads(
+ sha256 TEXT PRIMARY KEY, size_bytes INTEGER NOT NULL, storage_path TEXT NOT NULL,
+ mime_type TEXT, preview TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS evidence(
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, kind TEXT NOT NULL,
  data_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -104,7 +115,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class Database:
