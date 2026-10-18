@@ -11,11 +11,17 @@ from kore_next.mcp import McpManager
 async def test_mcp_structured_result_and_dynamic_tool_refresh(tmp_path: Path):
     fixture = Path(__file__).parent / "fixtures" / "mcp_server.py"
     manager = McpManager(tmp_path)
-    await manager.start([{
-        "name": "fixture", "command": sys.executable, "args": [str(fixture)],
-        "sandbox": {"filesystem": "host", "network": "allowed"},
-        "permission": "human_approval",
-    }])
+    await manager.start(
+        [
+            {
+                "name": "fixture",
+                "command": sys.executable,
+                "args": [str(fixture)],
+                "sandbox": {"filesystem": "host", "network": "allowed"},
+                "permission": "human_approval",
+            }
+        ]
+    )
     try:
         assert {tool["function"]["name"] for tool in manager.tool_definitions()} == {"mcp__fixture__echo"}
         result = json.loads(await manager.call("mcp__fixture__echo", {}))

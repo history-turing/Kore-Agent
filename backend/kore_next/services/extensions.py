@@ -36,27 +36,17 @@ class ExtensionService:
         self.skill_service = skills
         self.mcp_settings = mcp_settings
 
-    async def skills(self) -> list[dict[str, Any]]:
-        return await self.skill_service.skills()
-
-    async def migrate_user_skills(self) -> None:
-        await self.skill_service.migrate_user_skills()
-
-    async def mcp(self) -> dict[str, Any]:
-        return await self.mcp_settings.mcp()
-
-    async def save_mcp(self, data: dict[str, Any]) -> None:
-        await self.mcp_settings.save_mcp(data)
-
     async def extension_list(self, params: dict[str, Any]) -> dict[str, Any]:
         settings = self._settings()
-        mcp = await self.mcp()
-        skills = await self.skills()
+        mcp = await self.mcp_settings.mcp()
+        skills = await self.skill_service.skills()
         diagnostics = []
         for skill in skills:
             location = Path(str(skill.get("location") or ""))
             if not location.is_file():
-                diagnostics.append({"name": skill.get("name"), "scope": skill.get("scope"), "error": "SKILL.md is missing"})
+                diagnostics.append(
+                    {"name": skill.get("name"), "scope": skill.get("scope"), "error": "SKILL.md is missing"}
+                )
                 continue
             try:
                 content = location.read_text(encoding="utf-8")
@@ -80,7 +70,8 @@ class ExtensionService:
                 "config_path": str(settings.data_dir / "mcp.json"),
                 "error": None,
                 "restart_required": any(
-                    item.get("enabled", True) and item["name"] not in self.mcp_settings.runtime_servers() for item in mcp["servers"]
+                    item.get("enabled", True) and item["name"] not in self.mcp_settings.runtime_servers()
+                    for item in mcp["servers"]
                 ),
                 "servers": [self.mcp_settings.mcp_view(item) for item in mcp["servers"]],
             },
@@ -103,7 +94,9 @@ class ExtensionService:
         if plan.get("mcp_configs"):
             installed = []
             for config in plan["mcp_configs"]:
-                result = await self.mcp_add({**config, "permission": params.get("mcp_permission", "human_approval")})
+                result = await self.mcp_settings.mcp_add(
+                    {**config, "permission": params.get("mcp_permission", "human_approval")}
+                )
                 installed.append(result["server"])
             return {"skills": [], "mcp_servers": installed, "restart_required": bool(installed)}
 
@@ -126,7 +119,11 @@ class ExtensionService:
                 )
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
                 if process.returncode != 0:
-                    raise RpcFault(-32002, "Extension download failed", {"details": (stdout + stderr).decode(errors="replace")[-2000:]})
+                    raise RpcFault(
+                        -32002,
+                        "Extension download failed",
+                        {"details": (stdout + stderr).decode(errors="replace")[-2000:]},
+                    )
             else:
                 checkout = Path(source).expanduser().resolve()
             skill_files = self.discover_skill_files(checkout)
@@ -192,7 +189,15 @@ class ExtensionService:
             display_name = local.stem or local.name
         return {
             "fingerprint": fingerprint,
-            "items": [{"kind": "skill", "name": display_name, "source": source, "summary": "Scan and install SKILL.md files", "scope": scope}],
+            "items": [
+                {
+                    "kind": "skill",
+                    "name": display_name,
+                    "source": source,
+                    "summary": "Scan and install SKILL.md files",
+                    "scope": scope,
+                }
+            ],
             "actions": [f"Scan source and install discovered Skills into {scope} scope"],
             "warnings": [],
             "requires_download": requires_download,
@@ -204,7 +209,11 @@ class ExtensionService:
     @staticmethod
     def discover_skill_files(root: Path) -> list[Path]:
         if root.is_file():
-            return [root] if root.name.lower() == "skill.md" and not root.is_symlink() and root.stat().st_size <= 2 * 1024 * 1024 else []
+            return (
+                [root]
+                if root.name.lower() == "skill.md" and not root.is_symlink() and root.stat().st_size <= 2 * 1024 * 1024
+                else []
+            )
         results = []
         for candidate in root.rglob("SKILL.md"):
             relative = candidate.relative_to(root)
@@ -223,28 +232,17 @@ class ExtensionService:
         if not name:
             raise RpcFault(-32602, f"Invalid Skill name in {skill_file}")
         description = str(metadata.get("description") or f"Imported from {source}")
-        result = await self.skill_install({"name": name, "description": description, "instructions": instructions, "scope": scope})
+        result = await self.skill_service.skill_install(
+            {
+                "name": name,
+                "description": description,
+                "instructions": instructions,
+                "scope": scope,
+            }
+        )
         destination = Path(result["skill"]["location"]).parent
         for child in skill_file.parent.iterdir():
             if child.name == "SKILL.md" or child.name in {".git", "node_modules", ".venv"}:
                 continue
             self.skill_service.copy_skill_resource(child, destination / child.name, root=skill_file.parent)
         return result["skill"]
-
-    async def skill_install(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.skill_service.skill_install(params)
-
-    async def skill_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.skill_service.skill_set_enabled(params)
-
-    async def skill_delete(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.skill_service.skill_delete(params)
-
-    async def mcp_add(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.mcp_settings.mcp_add(params)
-
-    async def mcp_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.mcp_settings.mcp_set_enabled(params)
-
-    async def mcp_delete(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.mcp_settings.mcp_delete(params)

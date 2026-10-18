@@ -107,7 +107,9 @@ class ContextManager:
         if core_memory.strip():
             system_parts.append("Core memory (stable facts and preferences):\n" + core_memory.strip())
         if memory_index.strip():
-            system_parts.append("Long-term memory index. Use memory_read when details are needed:\n" + memory_index.strip())
+            system_parts.append(
+                "Long-term memory index. Use memory_read when details are needed:\n" + memory_index.strip()
+            )
         if task_context.strip():
             system_parts.append("Active task state:\n" + task_context.strip())
         if skill_catalog.strip():
@@ -121,14 +123,10 @@ class ContextManager:
         total = self.estimator.count_messages(messages)
         original_total = self.estimator.count_messages([messages[0], *history])
         original_tool_results = sum(
-            self.estimator.count_message(message)
-            for message in history
-            if message.get("role") == "tool"
+            self.estimator.count_message(message) for message in history if message.get("role") == "tool"
         )
         normalized_tool_results = sum(
-            self.estimator.count_message(message)
-            for message in normalized
-            if message.get("role") == "tool"
+            self.estimator.count_message(message) for message in normalized if message.get("role") == "tool"
         )
         if total <= working_input:
             return ContextDecision(
@@ -202,11 +200,7 @@ class ContextManager:
             bool(previous_summary),
             original_total,
             original_tool_results,
-            sum(
-                self.estimator.count_message(message)
-                for message in messages
-                if message.get("role") == "tool"
-            ),
+            sum(self.estimator.count_message(message) for message in messages if message.get("role") == "tool"),
         )
 
     async def prepare_step(
@@ -236,9 +230,7 @@ class ContextManager:
             self.estimator.count_message(item) for item in messages if item.get("role") == "tool"
         )
         per_tool_chars = min(self.tool_result_chars, max(1_000, int(available * 0.4) * 3))
-        normalized = [messages[0], *(
-            self._reduce_message(item, char_limit=per_tool_chars) for item in messages[1:]
-        )]
+        normalized = [messages[0], *(self._reduce_message(item, char_limit=per_tool_chars) for item in messages[1:])]
         stage = "tool_results" if normalized != messages else "none"
         if self.estimator.count_messages(normalized) > available:
             base_system, marker, previous_summary = str(normalized[0].get("content") or "").partition(
@@ -338,7 +330,9 @@ class ContextManager:
     @staticmethod
     def _fallback_summary(source: str, previous: str | None) -> str:
         prefix = (previous.strip() + "\n\n") if previous else ""
-        clipped = source if len(source) <= 12_000 else source[:6_000] + "\n...[summary source clipped]...\n" + source[-6_000:]
+        clipped = (
+            source if len(source) <= 12_000 else source[:6_000] + "\n...[summary source clipped]...\n" + source[-6_000:]
+        )
         return (prefix + clipped)[-18_000:]
 
     @staticmethod

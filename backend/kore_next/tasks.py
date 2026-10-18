@@ -79,7 +79,9 @@ class TaskService:
             "completed_at": stamp if status == "completed" else None,
             "revision": 1,
         }
-        await self.db.execute("INSERT INTO tasks(id,data_json,updated_at) VALUES(?,?,?)", (task["id"], dumps(task), stamp))
+        await self.db.execute(
+            "INSERT INTO tasks(id,data_json,updated_at) VALUES(?,?,?)", (task["id"], dumps(task), stamp)
+        )
         return task
 
     async def update(self, task_id: str, changes: dict[str, Any], *, run_id: str | None = None) -> dict[str, Any]:
@@ -117,7 +119,8 @@ class TaskService:
         active = [
             task
             for task in tasks
-            if task.get("status") in {"active", "blocked"} and (conversation_id is None or task.get("owner_conversation_id") == conversation_id)
+            if task.get("status") in {"active", "blocked"}
+            and (conversation_id is None or task.get("owner_conversation_id") == conversation_id)
         ]
         if not active:
             return ""
@@ -148,7 +151,9 @@ class TaskService:
                 target = by_id[step_id]
                 if "status" in update and update["status"] not in STEP_STATUSES:
                     raise ValueError("invalid step status")
-                target.update({key: value for key, value in update.items() if key in {"title", "description", "status", "result"}})
+                target.update(
+                    {key: value for key, value in update.items() if key in {"title", "description", "status", "result"}}
+                )
                 target["updated_at"] = now()
                 for position, item in enumerate(result):
                     if item.get("id") == step_id:

@@ -12,7 +12,7 @@ from croniter import croniter
 from ..database import Database
 from ..rpc import RpcFault, required
 from ..util import dumps, loads, now, uid
-from .runs import RunStore
+from .runs import RunStore, insert_run
 
 ExecuteRun = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 ScheduleNext = Callable[[dict[str, Any], str], str | None]
@@ -190,7 +190,8 @@ class AutomationService:
                 return None
             previous = await (
                 await db.execute(
-                    "SELECT 1 FROM runs WHERE source='automation' AND source_id=? AND status IN ('pending','running') LIMIT 1",
+                    "SELECT 1 FROM runs WHERE source='automation' AND source_id=? "
+                    "AND status IN ('pending','running') LIMIT 1",
                     (automation_id,),
                 )
             ).fetchone()
@@ -225,7 +226,8 @@ class AutomationService:
                 )
                 item["conversation_id"] = cid
             await db.execute(
-                "INSERT INTO messages(conversation_id,role,content,name,tool_call_id,tool_calls_json,reasoning,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO messages(conversation_id,role,content,name,tool_call_id,"
+                "tool_calls_json,reasoning,created_at) VALUES(?,?,?,?,?,?,?,?)",
                 (cid, "user", item["prompt"], None, None, "[]", None, stamp),
             )
             await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (stamp, cid))
@@ -248,30 +250,7 @@ class AutomationService:
                 "triggered_at": stamp,
                 "mode": "normal",
             }
-            await db.execute(
-                "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                tuple(
-                    run[key]
-                    for key in (
-                        "id",
-                        "conversation_id",
-                        "status",
-                        "user_message",
-                        "created_at",
-                        "started_at",
-                        "updated_at",
-                        "completed_at",
-                        "error",
-                        "stop_reason",
-                        "recovered_from_run_id",
-                        "source",
-                        "source_id",
-                        "scheduled_for",
-                        "triggered_at",
-                        "mode",
-                    )
-                ),
-            )
+            await insert_run(db, run)
             trigger_id = hashlib.sha256(f"{automation_id}\0{scheduled_for}".encode()).hexdigest()
             await db.execute(
                 "INSERT INTO automation_occurrences VALUES(?,?,?,?,?,?)",
@@ -294,7 +273,8 @@ class AutomationService:
         # A claimed-but-not-started Run is resumed once. A Run that was already
         # executing at a crash is interrupted, never silently repeated.
         await self.db.execute(
-            "UPDATE runs SET status='interrupted',stop_reason='host_restart',updated_at=? WHERE source='automation' AND status='running'",
+            "UPDATE runs SET status='interrupted',stop_reason='host_restart',updated_at=? "
+            "WHERE source='automation' AND status='running'",
             (now(),),
         )
         await self.db.execute(

@@ -36,7 +36,14 @@ class ComputerClient:
         self.sequence = 0
         self.lock = asyncio.Lock()
         configured = os.getenv("KORENEXT_COMPUTER_HELPER", "").strip()
-        default = Path(__file__).resolve().parents[2] / "native" / "macos-computer-helper" / ".build" / "release" / "koreagent-next-computer-helper"
+        default = (
+            Path(__file__).resolve().parents[2]
+            / "native"
+            / "macos-computer-helper"
+            / ".build"
+            / "release"
+            / "koreagent-next-computer-helper"
+        )
         self.helper_path = Path(configured).expanduser().resolve() if configured else default
         self.error: str | None = None
         self.session: ComputerSession | None = None

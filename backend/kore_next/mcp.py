@@ -44,8 +44,12 @@ class McpProcess:
         filesystem = str(sandbox.get("filesystem", "workspace"))
         network = str(sandbox.get("network", "denied"))
         launch = self.supervisor.prepare_launch(
-            command, args, cwd=cwd, env=self.config.get("env", {}),
-            filesystem=filesystem, network=network,
+            command,
+            args,
+            cwd=cwd,
+            env=self.config.get("env", {}),
+            filesystem=filesystem,
+            network=network,
             readable_roots=sandbox.get("readable_roots"),
             writable_roots=sandbox.get("writable_roots"),
             allowed_domains=sandbox.get("allowed_domains"),
@@ -53,8 +57,12 @@ class McpProcess:
         self.profile_path = launch.profile_path
         try:
             self.process = await asyncio.create_subprocess_exec(
-                *launch.command, cwd=launch.cwd, env=launch.env,
-                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                *launch.command,
+                cwd=launch.cwd,
+                env=launch.env,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
             self.reader_task = asyncio.create_task(self._read_loop())
             self.started_at = now()
@@ -218,7 +226,8 @@ class McpManager:
                 "content": result.get("content", []),
                 "structuredContent": result.get("structuredContent"),
                 "isError": bool(result.get("isError", False)),
-            }, ensure_ascii=False,
+            },
+            ensure_ascii=False,
         )
 
     def permission(self, compound_name: str) -> str:

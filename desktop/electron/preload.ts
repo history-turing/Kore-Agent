@@ -5,4 +5,3 @@ contextBridge.exposeInMainWorld('koreNext', {
   showApproval: () => ipcRenderer.invoke('show-approval'),
   hideApproval: () => ipcRenderer.invoke('hide-approval'),
 })
-

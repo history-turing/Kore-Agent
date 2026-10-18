@@ -6,9 +6,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from kore_next.agent import ToolExecutor
 from kore_next.config import Settings
 from kore_next.mcp import McpManager
+from kore_next.tools import ToolExecutor
 
 
 def executor(tmp_path: Path, **settings: object) -> ToolExecutor:
@@ -16,7 +16,9 @@ def executor(tmp_path: Path, **settings: object) -> ToolExecutor:
     return ToolExecutor(config, None, None, None, None, None)  # type: ignore[arg-type]
 
 
-async def test_search_uses_duckduckgo_without_key_and_falls_back_on_tavily_503(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_search_uses_duckduckgo_without_key_and_falls_back_on_tavily_503(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     import kore_next.tools.executor as executor_module
 
     original_client = httpx.AsyncClient
@@ -28,7 +30,11 @@ async def test_search_uses_duckduckgo_without_key_and_falls_back_on_tavily_503(t
             return httpx.Response(503)
         return httpx.Response(200, text='<a class="result__a" href="https://example.com">Example</a>')
 
-    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(
+        executor_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
     no_key = executor(tmp_path, search_provider="auto", tavily_api_key="")
     result = json.loads(await no_key._web_search("query", 5))
     assert result["provider"] == "duckduckgo"
@@ -48,24 +54,37 @@ async def test_search_filters_before_limit_and_unwraps_redirects(tmp_path: Path,
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "api.tavily.com":
-            return httpx.Response(200, json={"results": [
-                {"title": "Unsafe", "url": "javascript:alert(1)"},
-                {"title": "", "url": "https://example.com/empty"},
-                {"title": "First", "url": "https://example.com/first"},
-                {"title": "Second", "url": "https://example.com/second"},
-            ]})
-        return httpx.Response(200, text=(
-            '<a class="result__a" href="javascript:alert(1)">Unsafe</a>'
-            '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Ffirst">First</a>'
-            '<a class="result__a" href="https://example.com/second">Second</a>'
-        ))
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"title": "Unsafe", "url": "javascript:alert(1)"},
+                        {"title": "", "url": "https://example.com/empty"},
+                        {"title": "First", "url": "https://example.com/first"},
+                        {"title": "Second", "url": "https://example.com/second"},
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            text=(
+                '<a class="result__a" href="javascript:alert(1)">Unsafe</a>'
+                '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Ffirst">First</a>'
+                '<a class="result__a" href="https://example.com/second">Second</a>'
+            ),
+        )
 
-    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(
+        executor_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
     for provider in ("tavily", "duckduckgo"):
         tool = executor(tmp_path, search_provider=provider, tavily_api_key="test-key")
         result = json.loads(await tool._web_search("query", 2))
         assert [item["url"] for item in result["results"]] == [
-            "https://example.com/first", "https://example.com/second",
+            "https://example.com/first",
+            "https://example.com/second",
         ]
 
 
@@ -80,7 +99,11 @@ async def test_http_redirect_rechecks_target_before_request(tmp_path: Path, monk
         requested.append(str(request.url))
         return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
 
-    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(
+        executor_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
     tool = executor(tmp_path)
 
     async def validate(url: str) -> None:
@@ -103,7 +126,11 @@ def test_tool_catalog_exposes_optional_tools_only_after_activation(tmp_path: Pat
 
     tool = ToolExecutor(
         Settings(data_dir=tmp_path / "data", workspace_dir=tmp_path / "workspace"),
-        None, None, None, McpManager(tmp_path), NoComputer(),  # type: ignore[arg-type]
+        None,
+        None,
+        None,
+        McpManager(tmp_path),
+        NoComputer(),  # type: ignore[arg-type]
     )
     normal = {item["function"]["name"] for group in tool.tool_definitions("normal") for item in group}
     plan = {item["function"]["name"] for group in tool.tool_definitions("plan") for item in group}

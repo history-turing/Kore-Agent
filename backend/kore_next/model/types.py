@@ -32,7 +32,9 @@ def model_usage(
     if cached_input_tokens is not None:
         usage["cached_input_tokens"] = cached_input_tokens
         usage["cache_read_input_tokens"] = cached_input_tokens
-        usage["uncached_input_tokens"] = uncached_input_tokens if uncached_input_tokens is not None else max(0, input_tokens - cached_input_tokens)
+        usage["uncached_input_tokens"] = (
+            uncached_input_tokens if uncached_input_tokens is not None else max(0, input_tokens - cached_input_tokens)
+        )
     if cache_write_input_tokens is not None:
         usage["cache_write_input_tokens"] = cache_write_input_tokens
     return usage

@@ -5,7 +5,7 @@ SWE-bench 分两步：先生成 patch，再独立评分。KoreAgent 负责第一
 ## 前置条件
 
 - Docker Desktop 或 Linux Docker，能运行 `x86_64` Linux 容器
-- Python 3.11+
+- Python 3.12+
 - 可用的模型 API Key
 - 官方镜像每个约 1–2GB，完整跑 Verified 建议预留 100GB 以上磁盘
 

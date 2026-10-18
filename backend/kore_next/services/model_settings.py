@@ -57,11 +57,15 @@ class ModelSettingsService:
                     "base_url": item.get("base_url") or (settings.base_url if name == settings.provider else None),
                     "api_style": item.get("api_style", default_api_style(name)),
                     "configured": configured,
-                    "key_source": self.secrets.source(name) if self.secrets.get(name) else ("environment" if configured else "none"),
+                    "key_source": self.secrets.source(name)
+                    if self.secrets.get(name)
+                    else ("environment" if configured else "none"),
                 }
             )
         role_default = {"enabled": True, "inherit_main": True, "provider": None, "model": None}
-        roles = {key: saved.get(key, role_default) for key in ("reflection", "maintenance", "summary", "skill_learning")}
+        roles = {
+            key: saved.get(key, role_default) for key in ("reflection", "maintenance", "summary", "skill_learning")
+        }
         running = self._running_tasks()
         return {
             "default_provider": default_provider,
@@ -89,7 +93,8 @@ class ModelSettingsService:
                 },
             },
             "restart_required": any(
-                item.get("enabled", True) and item["name"] not in self._runtime_servers() for item in (await self.mcp_servers())["servers"]
+                item.get("enabled", True) and item["name"] not in self._runtime_servers()
+                for item in (await self.mcp_servers())["servers"]
             ),
             "restart_supported": True,
             "restart_blocked_by_run_ids": [rid for rid, task in running.items() if not task.done()],
@@ -143,7 +148,9 @@ class ModelSettingsService:
                     "duration_ms": 0,
                     "error": "已保存的 API Key 仅能发送到提供商官方 HTTPS 端点；自定义地址测试请单独输入 Key。",
                 }
-            config["api_key"] = self.secrets.get(provider) or (settings.api_key if provider == settings.provider else "")
+            config["api_key"] = self.secrets.get(provider) or (
+                settings.api_key if provider == settings.provider else ""
+            )
         config["base_url"] = base_url
         client = self._model_client_factory(settings, config)
         try:
@@ -175,4 +182,9 @@ class ModelSettingsService:
             return main
         provider = role_settings.get("provider")
         item = next((entry for entry in saved.get("providers", []) if entry.get("provider") == provider), {})
-        return {"provider": provider, **item, "model": role_settings.get("model") or item.get("model"), "api_key": self.secrets.get(provider)}
+        return {
+            "provider": provider,
+            **item,
+            "model": role_settings.get("model") or item.get("model"),
+            "api_key": self.secrets.get(provider),
+        }

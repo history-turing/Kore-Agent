@@ -11,9 +11,17 @@ function surfaceUrl(hash = '') {
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 980, minHeight: 650, title: 'KoreAgent Next',
+    width: 1440,
+    height: 900,
+    minWidth: 980,
+    minHeight: 650,
+    title: 'KoreAgent Next',
     backgroundColor: '#eef3f8',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   })
   const developmentUrl = surfaceUrl()
   if (developmentUrl) win.loadURL(developmentUrl)
@@ -23,15 +31,27 @@ function createWindow() {
 function showApprovalWindow() {
   if (!approvalWindow) {
     approvalWindow = new BrowserWindow({
-      width: 430, height: 390, minWidth: 380, minHeight: 330,
-      title: 'KoreAgent Next · 操作确认', alwaysOnTop: true, resizable: true,
-      backgroundColor: '#f4f7fb', show: false,
-      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+      width: 430,
+      height: 390,
+      minWidth: 380,
+      minHeight: 330,
+      title: 'KoreAgent Next · 操作确认',
+      alwaysOnTop: true,
+      resizable: true,
+      backgroundColor: '#f4f7fb',
+      show: false,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
     })
     const url = surfaceUrl('#approval')
     if (url) void approvalWindow.loadURL(url)
     else void approvalWindow.loadFile(path.join(__dirname, '../../dist/index.html'), { hash: 'approval' })
-    approvalWindow.on('closed',()=>{approvalWindow=null})
+    approvalWindow.on('closed', () => {
+      approvalWindow = null
+    })
   }
   approvalWindow.show()
   approvalWindow.focus()
@@ -42,7 +62,11 @@ app.whenReady().then(() => {
   ipcMain.handle('notify', (_e, title: string, body: string) => new Notification({ title, body }).show())
   ipcMain.handle('show-approval', () => showApprovalWindow())
   ipcMain.handle('hide-approval', () => approvalWindow?.hide())
-  createWindow(); app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow() })
+  createWindow()
+  app.on('activate', () => {
+    if (!BrowserWindow.getAllWindows().length) createWindow()
+  })
 })
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})

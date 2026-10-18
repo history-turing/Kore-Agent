@@ -1,158 +1,423 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive, Bot, Brain, CheckCircle2, ChevronRight, Clock3, Cpu, ExternalLink,
-  FileOutput, Menu, MessageSquare, PauseCircle, Pencil, Pin, PinOff,
-  Plus, RefreshCw, Search, Settings, ShieldCheck, Trash2,
-  X, XCircle, Zap,
+  Archive,
+  Bot,
+  Brain,
+  Clock3,
+  Cpu,
+  FileOutput,
+  MessageSquare,
+  Search,
+  Settings,
+  ShieldCheck,
+  X,
+  Zap,
 } from 'lucide-react'
-import { artifactContentUrl, computerScreenshotUrl } from './apiConfig'
-import { approvalFacts, approvalTitle, permissionScopeLabel } from './approvalPresentation'
 import { queryKeysForAgentEvent } from './eventInvalidation'
 import { ConfirmProvider, useConfirmAction } from './ConfirmDialog'
-import { reduceAgentEvent, type LiveRunState } from './liveState'
 import PreferencesView from './PreferencesView'
 import RunExplorer from './RunExplorer'
 import { rpc } from './rpc'
-import type { Approval, Artifact, Automation, Conversation, MemoryItem, Message, PermissionScope, Run, Task } from './types'
+import type { Approval, Conversation, Run } from './types'
+import { Approvals } from './views/ApprovalsView'
+import { Artifacts } from './views/ArtifactsView'
+import { Automations } from './views/AutomationsView'
+import { Chat } from './views/ChatView'
+import { Computer } from './views/ComputerView'
+import { Memory } from './views/MemoryView'
 
-type View='chat'|'runs'|'automations'|'approvals'|'artifacts'|'computer'|'memory'|'settings'
-const nav:Array<[View,string,typeof MessageSquare]>=[
-  ['chat','对话',MessageSquare],['runs','运行',Archive],['automations','自动化',Clock3],
-  ['approvals','审批',ShieldCheck],['artifacts','交付物',FileOutput],['computer','电脑',Cpu],
-  ['memory','记忆',Brain],['settings','设置',Settings],
+type View = 'chat' | 'runs' | 'automations' | 'approvals' | 'artifacts' | 'computer' | 'memory' | 'settings'
+const nav: Array<[View, string, typeof MessageSquare]> = [
+  ['chat', '对话', MessageSquare],
+  ['runs', '运行', Archive],
+  ['automations', '自动化', Clock3],
+  ['approvals', '审批', ShieldCheck],
+  ['artifacts', '交付物', FileOutput],
+  ['computer', '电脑', Cpu],
+  ['memory', '记忆', Brain],
+  ['settings', '设置', Settings],
 ]
 
-type Toast={id:number;message:string;tone:'success'|'danger'|'info'}
-type Command={id:string;label:string;hint:string;run():void}
-function useHostEvents(pushToast:(message:string,tone:Toast['tone'])=>void){
-  const query=useQueryClient()
-  useEffect(()=>{
+type Toast = { id: number; message: string; tone: 'success' | 'danger' | 'info' }
+type Command = { id: string; label: string; hint: string; run(): void }
+function useHostEvents(pushToast: (message: string, tone: Toast['tone']) => void) {
+  const query = useQueryClient()
+  useEffect(() => {
     rpc.connect()
     // Durable events invalidate only the views they affect; token deltas are
     // rendered by the live reducer without repeatedly fetching the full trace.
-    const invalidate=(...keys:string[])=>keys.forEach(key=>query.invalidateQueries({queryKey:[key]}))
-    const agent=rpc.on('agent.event',(event:any)=>{
-      const kind=String(event?.type||'')
+    const invalidate = (...keys: string[]) =>
+      keys.forEach((key) => query.invalidateQueries({ queryKey: [key] }))
+    const agent = rpc.on('agent.event', (event: any) => {
+      const kind = String(event?.type || '')
       invalidate(...queryKeysForAgentEvent(kind))
-      if(kind==='agent_completed'){window.koreNext?.notify('KoreAgent Next','任务已完成');pushToast('任务已完成','success')}
-      if(kind==='agent_failed'){window.koreNext?.notify('KoreAgent Next','任务执行失败，请查看运行记录');pushToast('任务执行失败，请查看运行记录','danger')}
+      if (kind === 'agent_completed') {
+        window.koreNext?.notify('KoreAgent Next', '任务已完成')
+        pushToast('任务已完成', 'success')
+      }
+      if (kind === 'agent_failed') {
+        window.koreNext?.notify('KoreAgent Next', '任务执行失败，请查看运行记录')
+        pushToast('任务执行失败，请查看运行记录', 'danger')
+      }
     })
-    const run=rpc.on('run.status',()=>invalidate('runs'))
-    const required=rpc.on('approval.required',(approval:any)=>{invalidate('approvals');if(approval?.ui_scope==='desktop'||approval?.tool_name?.startsWith('computer_'))window.koreNext?.showApproval()})
-    const resolved=rpc.on('approval.resolved',()=>invalidate('approvals'))
-    const artifact=rpc.on('artifact.created',(item:any)=>{invalidate('artifacts');const message=`已生成交付物：${item?.title||'未命名'}`;window.koreNext?.notify('KoreAgent Next',message);pushToast(message,'success')})
-    return()=>{agent();run();required();resolved();artifact()}
-  },[pushToast,query])
+    const run = rpc.on('run.status', () => invalidate('runs'))
+    const required = rpc.on('approval.required', (approval: any) => {
+      invalidate('approvals')
+      if (approval?.ui_scope === 'desktop' || approval?.tool_name?.startsWith('computer_'))
+        window.koreNext?.showApproval()
+    })
+    const resolved = rpc.on('approval.resolved', () => invalidate('approvals'))
+    const artifact = rpc.on('artifact.created', (item: any) => {
+      invalidate('artifacts')
+      const message = `已生成交付物：${item?.title || '未命名'}`
+      window.koreNext?.notify('KoreAgent Next', message)
+      pushToast(message, 'success')
+    })
+    return () => {
+      agent()
+      run()
+      required()
+      resolved()
+      artifact()
+    }
+  }, [pushToast, query])
 }
 
-export default function App(){return <ConfirmProvider><AppContent/></ConfirmProvider>}
+export default function App() {
+  return (
+    <ConfirmProvider>
+      <AppContent />
+    </ConfirmProvider>
+  )
+}
 
-function AppContent(){
-  const confirmAction=useConfirmAction()
-  const [view,setView]=useState<View>('chat');const [status,setStatus]=useState(rpc.status);const [palette,setPalette]=useState(false);const [hadConnection,setHadConnection]=useState(false);const [toasts,setToasts]=useState<Toast[]>([]);const [focusedConversationId,setFocusedConversationId]=useState<string|null>(null);const [focusedRunId,setFocusedRunId]=useState<string|null>(null);const [requestedMode,setRequestedMode]=useState<'normal'|'plan'|null>(null)
-  const pushToast=useCallback((message:string,tone:Toast['tone'])=>{const id=Date.now()+Math.random();setToasts(items=>[...items.slice(-3),{id,message,tone}]);window.setTimeout(()=>setToasts(items=>items.filter(item=>item.id!==id)),5000)},[])
+function AppContent() {
+  const confirmAction = useConfirmAction()
+  const [view, setView] = useState<View>('chat')
+  const [status, setStatus] = useState(rpc.status)
+  const [palette, setPalette] = useState(false)
+  const [hadConnection, setHadConnection] = useState(false)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [focusedConversationId, setFocusedConversationId] = useState<string | null>(null)
+  const [focusedRunId, setFocusedRunId] = useState<string | null>(null)
+  const [requestedMode, setRequestedMode] = useState<'normal' | 'plan' | null>(null)
+  const pushToast = useCallback((message: string, tone: Toast['tone']) => {
+    const id = Date.now() + Math.random()
+    setToasts((items) => [...items.slice(-3), { id, message, tone }])
+    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 5000)
+  }, [])
   useHostEvents(pushToast)
-  const runSummary=useQuery({queryKey:['runs','rail'],queryFn:()=>rpc.call<{runs:Run[]}>('run.list',{limit:100}).then(value=>value.runs),refetchInterval:15000,retry:false})
-  const approvalSummary=useQuery({queryKey:['approvals','rail'],queryFn:()=>rpc.call<{approvals:Approval[]}>('approval.list',{status:'pending',limit:100}).then(value=>value.approvals),refetchInterval:15000,retry:false})
-  const runningCount=runSummary.data?.filter(item=>['pending','running'].includes(item.status)).length||0
-  const approvalCount=approvalSummary.data?.length||0
-  const activeRun=runSummary.data?.find(item=>['pending','running'].includes(item.status))
-  const commands:Command[]=[
-    {id:'new-conversation',label:'新建会话',hint:'对话',run:()=>{void rpc.call<{conversation:Conversation}>('conversation.create',{}).then(result=>{setFocusedConversationId(result.conversation.id);setView('chat')}).catch(error=>pushToast(String(error),'danger'))}},
-    {id:'mode-normal',label:'切换为执行模式',hint:'对话',run:()=>{setRequestedMode('normal');setView('chat')}},
-    {id:'mode-plan',label:'切换为计划模式',hint:'对话',run:()=>{setRequestedMode('plan');setView('chat')}},
-    ...(activeRun?[{id:'view-active-run',label:'查看当前运行',hint:activeRun.user_message.slice(0,40),run:()=>{setFocusedRunId(activeRun.id);setView('runs')}},{id:'stop-active-run',label:'中断当前运行',hint:'保留检查点',run:()=>{void confirmAction({title:'中断当前运行？',message:'当前执行将停止，已有进度会保存为检查点，可稍后恢复。',confirmLabel:'中断并保存'}).then(yes=>{if(yes)void rpc.call('run.interrupt',{run_id:activeRun.id}).catch(error=>pushToast(String(error),'danger'))})}}]:[]),
-    ...nav.map(([id,label]):Command=>({id:`go-${id}`,label:`打开${label}`,hint:'页面',run:()=>setView(id)})),
+  const runSummary = useQuery({
+    queryKey: ['runs', 'rail'],
+    queryFn: () => rpc.call<{ runs: Run[] }>('run.list', { limit: 100 }).then((value) => value.runs),
+    refetchInterval: 15000,
+    retry: false,
+  })
+  const approvalSummary = useQuery({
+    queryKey: ['approvals', 'rail'],
+    queryFn: () =>
+      rpc
+        .call<{ approvals: Approval[] }>('approval.list', { status: 'pending', limit: 100 })
+        .then((value) => value.approvals),
+    refetchInterval: 15000,
+    retry: false,
+  })
+  const runningCount =
+    runSummary.data?.filter((item) => ['pending', 'running'].includes(item.status)).length || 0
+  const approvalCount = approvalSummary.data?.length || 0
+  const activeRun = runSummary.data?.find((item) => ['pending', 'running'].includes(item.status))
+  const commands: Command[] = [
+    {
+      id: 'new-conversation',
+      label: '新建会话',
+      hint: '对话',
+      run: () => {
+        void rpc
+          .call<{ conversation: Conversation }>('conversation.create', {})
+          .then((result) => {
+            setFocusedConversationId(result.conversation.id)
+            setView('chat')
+          })
+          .catch((error) => pushToast(String(error), 'danger'))
+      },
+    },
+    {
+      id: 'mode-normal',
+      label: '切换为执行模式',
+      hint: '对话',
+      run: () => {
+        setRequestedMode('normal')
+        setView('chat')
+      },
+    },
+    {
+      id: 'mode-plan',
+      label: '切换为计划模式',
+      hint: '对话',
+      run: () => {
+        setRequestedMode('plan')
+        setView('chat')
+      },
+    },
+    ...(activeRun
+      ? [
+          {
+            id: 'view-active-run',
+            label: '查看当前运行',
+            hint: activeRun.user_message.slice(0, 40),
+            run: () => {
+              setFocusedRunId(activeRun.id)
+              setView('runs')
+            },
+          },
+          {
+            id: 'stop-active-run',
+            label: '中断当前运行',
+            hint: '保留检查点',
+            run: () => {
+              void confirmAction({
+                title: '中断当前运行？',
+                message: '当前执行将停止，已有进度会保存为检查点，可稍后恢复。',
+                confirmLabel: '中断并保存',
+              }).then((yes) => {
+                if (yes)
+                  void rpc
+                    .call('run.interrupt', { run_id: activeRun.id })
+                    .catch((error) => pushToast(String(error), 'danger'))
+              })
+            },
+          },
+        ]
+      : []),
+    ...nav.map(([id, label]): Command => ({
+      id: `go-${id}`,
+      label: `打开${label}`,
+      hint: '页面',
+      run: () => setView(id),
+    })),
   ]
-  useEffect(()=>{rpc.onStatus=value=>{setStatus(value);if(value==='connected')setHadConnection(true)};rpc.connect();return()=>{rpc.onStatus=undefined}},[])
-  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(document.querySelector('[role="alertdialog"]'))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){event.preventDefault();setPalette(value=>!value)}if(event.key==='Escape')setPalette(false)};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)},[])
-  return <div className="app-shell"><aside className="sidebar" aria-label="主导航"><div className="brand" title="KoreAgent Next"><Bot size={20}/></div><nav>{nav.map(([id,label,Icon])=>{const count=id==='runs'?runningCount:id==='approvals'?approvalCount:0;return <button key={id} aria-label={label} aria-current={view===id?'page':undefined} title={label} className={view===id?'active':''} onClick={()=>setView(id)}><Icon size={19}/><span>{label}</span>{count>0&&<b className="nav-badge" aria-label={`${count} 项待处理`}>{count>99?'99+':count}</b>}</button>})}</nav><button className="palette-trigger" aria-label="打开操作面板" title="操作面板（Ctrl+K）" onClick={()=>setPalette(true)}><Search size={17}/><span>操作</span></button><div className={`host-dot ${status}`} role="status" aria-label={`Host ${status}`} title={`Host: ${status}`}/></aside><main>{hadConnection&&status==='offline'&&<div className="host-banner" role="status"><span/>Host 连接已断开，正在重连…</div>}{view==='chat'?<Chat initialConversationId={focusedConversationId} requestedMode={requestedMode} onOpenRun={id=>{setFocusedRunId(id);setView('runs')}}/>:view==='runs'?<RunExplorer initialRunId={focusedRunId} onOpenConversation={id=>{setFocusedConversationId(id);setView('chat')}}/>:view==='automations'?<Automations/>:view==='approvals'?<Approvals/>:view==='artifacts'?<Artifacts/>:view==='computer'?<Computer/>:view==='memory'?<Memory/>:<PreferencesView/>}</main>{palette&&<CommandPalette commands={commands} close={()=>setPalette(false)}/>}<ToastTray items={toasts} dismiss={id=>setToasts(values=>values.filter(item=>item.id!==id))}/></div>
+  useEffect(() => {
+    rpc.onStatus = (value) => {
+      setStatus(value)
+      if (value === 'connected') setHadConnection(true)
+    }
+    rpc.connect()
+    return () => {
+      rpc.onStatus = undefined
+    }
+  }, [])
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (document.querySelector('[role="alertdialog"]')) return
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPalette((value) => !value)
+      }
+      if (event.key === 'Escape') setPalette(false)
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+  return (
+    <div className="app-shell">
+      <aside className="sidebar" aria-label="主导航">
+        <div className="brand" title="KoreAgent Next">
+          <Bot size={20} />
+        </div>
+        <nav>
+          {nav.map(([id, label, Icon]) => {
+            const count = id === 'runs' ? runningCount : id === 'approvals' ? approvalCount : 0
+            return (
+              <button
+                key={id}
+                aria-label={label}
+                aria-current={view === id ? 'page' : undefined}
+                title={label}
+                className={view === id ? 'active' : ''}
+                onClick={() => setView(id)}
+              >
+                <Icon size={19} />
+                <span>{label}</span>
+                {count > 0 && (
+                  <b className="nav-badge" aria-label={`${count} 项待处理`}>
+                    {count > 99 ? '99+' : count}
+                  </b>
+                )}
+              </button>
+            )
+          })}
+        </nav>
+        <button
+          className="palette-trigger"
+          aria-label="打开操作面板"
+          title="操作面板（Ctrl+K）"
+          onClick={() => setPalette(true)}
+        >
+          <Search size={17} />
+          <span>操作</span>
+        </button>
+        <div
+          className={`host-dot ${status}`}
+          role="status"
+          aria-label={`Host ${status}`}
+          title={`Host: ${status}`}
+        />
+      </aside>
+      <main>
+        {hadConnection && status === 'offline' && (
+          <div className="host-banner" role="status">
+            <span />
+            Host 连接已断开，正在重连…
+          </div>
+        )}
+        {view === 'chat' ? (
+          <Chat
+            initialConversationId={focusedConversationId}
+            requestedMode={requestedMode}
+            onOpenRun={(id) => {
+              setFocusedRunId(id)
+              setView('runs')
+            }}
+          />
+        ) : view === 'runs' ? (
+          <RunExplorer
+            initialRunId={focusedRunId}
+            onOpenConversation={(id) => {
+              setFocusedConversationId(id)
+              setView('chat')
+            }}
+          />
+        ) : view === 'automations' ? (
+          <Automations />
+        ) : view === 'approvals' ? (
+          <Approvals />
+        ) : view === 'artifacts' ? (
+          <Artifacts />
+        ) : view === 'computer' ? (
+          <Computer />
+        ) : view === 'memory' ? (
+          <Memory />
+        ) : (
+          <PreferencesView />
+        )}
+      </main>
+      {palette && <CommandPalette commands={commands} close={() => setPalette(false)} />}
+      <ToastTray
+        items={toasts}
+        dismiss={(id) => setToasts((values) => values.filter((item) => item.id !== id))}
+      />
+    </div>
+  )
 }
 
-function CommandPalette({commands,close}:{commands:Command[];close():void}){const [term,setTerm]=useState('');const [focused,setFocused]=useState(0);const input=useRef<HTMLInputElement>(null);const previousFocus=useRef<HTMLElement|null>(document.activeElement as HTMLElement|null);useEffect(()=>{input.current?.focus();return()=>previousFocus.current?.focus()},[]);const items=commands.filter(item=>`${item.label} ${item.hint}`.toLowerCase().includes(term.trim().toLowerCase()));useEffect(()=>setFocused(0),[term]);const execute=(item:Command)=>{item.run();close()};const key=(event:React.KeyboardEvent)=>{if(event.key==='ArrowDown'){event.preventDefault();setFocused(value=>(value+1)%Math.max(1,items.length))}else if(event.key==='ArrowUp'){event.preventDefault();setFocused(value=>(value-1+items.length)%Math.max(1,items.length))}else if(event.key==='Enter'&&items[focused]){event.preventDefault();execute(items[focused])}else if(event.key==='Escape'){event.preventDefault();close()}else if(event.key==='Tab'){const controls=Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input,button'));const first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}};return <div className="modal-back" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><section className="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-title" onKeyDown={key}><h2 id="command-title">操作面板</h2><label className="search-field"><Search size={16}/><input ref={input} value={term} onChange={e=>setTerm(e.target.value)} placeholder="搜索页面或操作" aria-label="搜索页面或操作"/></label><div role="listbox">{items.map((item,index)=><button role="option" aria-selected={focused===index} key={item.id} className={focused===index?'active':''} onMouseEnter={()=>setFocused(index)} onClick={()=>execute(item)}><Zap size={17}/><span>{item.label}</span><small>{item.hint}</small></button>)}{items.length===0&&<p className="palette-empty">没有匹配的操作</p>}</div><footer><span>↑ ↓ 选择</span><span>Enter 执行</span></footer><button className="close-palette" aria-label="关闭" onClick={close}><X size={16}/></button></section></div>}
-function ToastTray({items,dismiss}:{items:Toast[];dismiss(id:number):void}){return <div className="toast-viewport" aria-live="polite">{items.map(item=><div className={`toast toast-${item.tone}`} role="status" key={item.id}><span>{item.message}</span><button aria-label="关闭通知" onClick={()=>dismiss(item.id)}><X size={14}/></button></div>)}</div>}
-function Page({title,subtitle,actions,children}:{title:string;subtitle:string;actions?:React.ReactNode;children:React.ReactNode}){return <section className="page"><header className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div>{actions}</header><div className="page-body">{children}</div></section>}
-function Empty({icon:Icon=Zap,title,hint,action}:{icon?:typeof Zap;title:string;hint:string;action?:React.ReactNode}){return <div className="empty"><Icon size={28}/><h3>{title}</h3><p>{hint}</p>{action}</div>}
-function Busy(){return <div className="busy" role="status"><RefreshCw size={18}/><span>加载中</span></div>}
-function ErrorBox({error}:{error:unknown}){return <div className="error-box" role="alert">{error instanceof Error?error.message:String(error)}</div>}
-function statusChinese(value:string){return ({pending:'待处理',active:'进行中',running:'运行中',blocked:'受阻',completed:'已完成',failed:'失败',interrupted:'已中断',cancelled:'已取消',paused:'已暂停',approved:'已允许',denied:'已拒绝',available:'可用',unavailable:'不可用',restart_required:'需重启',archived:'已归档'} as Record<string,string>)[value]||value}
-function Status({value}:{value:string}){return <span className={`status ${value}`}>{statusChinese(value)}</span>}
-
-const starterPrompts=['梳理这个项目并给出可执行计划','检查当前实现的风险与缺口','完成一个任务并把结果发布为交付物']
-function Chat({initialConversationId,requestedMode,onOpenRun}:{initialConversationId:string|null;requestedMode:'normal'|'plan'|null;onOpenRun(id:string):void}){
-  const confirmAction=useConfirmAction()
-  const qc=useQueryClient();const [selected,setSelected]=useState('');const [input,setInput]=useState('');const [mode,setMode]=useState<'normal'|'plan'>('normal');const [live,setLive]=useState<LiveRunState|null>(null);const [planTaskId,setPlanTaskId]=useState<string|null>(null);const [drawer,setDrawer]=useState(false);const [renaming,setRenaming]=useState(false)
-  const [pinned,setPinned]=useState<string[]>(()=>JSON.parse(localStorage.getItem('koreagent:pinned-conversations')||'[]'))
-  useEffect(()=>{if(initialConversationId)setSelected(initialConversationId)},[initialConversationId])
-  useEffect(()=>{if(requestedMode)setMode(requestedMode)},[requestedMode])
-  const conversations=useQuery({queryKey:['conversations'],queryFn:()=>rpc.call<{conversations:Conversation[]}>('conversation.list',{limit:100}).then(x=>x.conversations)})
-  const ordered=useMemo(()=>[...(conversations.data||[])].sort((a,b)=>Number(pinned.includes(b.id))-Number(pinned.includes(a.id))),[conversations.data,pinned])
-  useEffect(()=>{if(!selected&&ordered[0])setSelected(initialConversationId||ordered[0].id)},[ordered,selected,initialConversationId])
-  const detail=useQuery({queryKey:['conversation',selected],enabled:!!selected,queryFn:()=>rpc.call<{conversation:Conversation;messages:Message[]}>('conversation.get',{conversation_id:selected})})
-  const tasks=useQuery({queryKey:['tasks',selected],enabled:!!selected,queryFn:()=>rpc.call<{tasks:Task[]}>('task.list',{conversation_id:selected,limit:100}).then(x=>x.tasks)})
-  const runs=useQuery({queryKey:['runs',selected],enabled:!!selected,queryFn:()=>rpc.call<{runs:Run[]}>('run.list',{conversation_id:selected,limit:20}).then(x=>x.runs)})
-  const artifacts=useQuery({queryKey:['artifacts',selected],enabled:!!selected,queryFn:()=>rpc.call<{artifacts:Artifact[]}>('artifact.list',{conversation_id:selected,limit:50}).then(x=>x.artifacts)})
-  const create=useMutation({mutationFn:()=>rpc.call<{conversation:Conversation}>('conversation.create',{}),onSuccess:r=>{setSelected(r.conversation.id);setDrawer(false);qc.invalidateQueries({queryKey:['conversations']})}})
-  const remove=useMutation({mutationFn:(id:string)=>rpc.call('conversation.delete',{conversation_id:id}),onSuccess:(_result,id)=>{qc.setQueryData<Conversation[]>(['conversations'],items=>items?.filter(item=>item.id!==id));setSelected('');qc.invalidateQueries({queryKey:['conversations']})}})
-  const rename=useMutation({mutationFn:(title:string)=>rpc.call('conversation.rename',{conversation_id:selected,title}),onSuccess:()=>{setRenaming(false);qc.invalidateQueries({queryKey:['conversation',selected]});qc.invalidateQueries({queryKey:['conversations']})}})
-  const approvals=useQuery({queryKey:['approvals','chat'],queryFn:()=>rpc.call<{approvals:Approval[]}>('approval.list',{status:'pending',limit:50}).then(x=>x.approvals),refetchInterval:15000})
-  const send=useMutation({mutationFn:({id,text}:{id:string;text:string})=>rpc.call<any>('conversation.send',{conversation_id:id,content:text,mode}),onMutate:()=>{setLive({runId:'',content:'',reasoning:'',tools:[],toolActivity:[],status:'starting'});setPlanTaskId(null)},onSuccess:async result=>{setInput('');setPlanTaskId(result.plan_task_id||null);await Promise.all([qc.invalidateQueries({queryKey:['conversation',selected]}),qc.invalidateQueries({queryKey:['conversations']}),qc.invalidateQueries({queryKey:['tasks',selected]}),qc.invalidateQueries({queryKey:['artifacts',selected]})]);setLive(null)},onError:()=>setLive(null)})
-  useEffect(()=>rpc.on('agent.event',(event:any)=>{if(event?.conversation_id===selected)setLive(previous=>reduceAgentEvent(previous,event))}),[selected])
-  const pendingApproval=approvals.data?.find(item=>!live?.runId||item.run_id===live.runId)
-  const approval=useMutation({mutationFn:({id,yes,scope}:{id:string;yes:boolean;scope:PermissionScope})=>rpc.call(yes?'approval.approve':'approval.deny',{approval_id:id,scope}),onSuccess:()=>approvals.refetch()})
-  const interrupt=useMutation({mutationFn:(id:string)=>rpc.call('run.interrupt',{run_id:id}),onSuccess:()=>setLive(previous=>previous?{...previous,status:'interrupted'}:null)})
-  const recover=useMutation({mutationFn:(id:string)=>rpc.call('run.recover',{run_id:id}),onSuccess:()=>{qc.invalidateQueries({queryKey:['runs',selected]});qc.invalidateQueries({queryKey:['conversation',selected]})}})
-  const plan=useQuery({queryKey:['task',planTaskId],enabled:!!planTaskId,queryFn:()=>rpc.call<{task:Task}>('task.get',{task_id:planTaskId}).then(x=>x.task)})
-  const decidePlan=useMutation({mutationFn:(accepted:boolean)=>rpc.call<{task:Task}>(accepted?'task.plan_accept':'task.plan_reject',{task_id:planTaskId}),onSuccess:result=>{qc.setQueryData(['task',planTaskId],result.task);qc.invalidateQueries({queryKey:['tasks',selected]})}})
-  const submit=()=>{const text=input.trim();if(selected&&text&&!send.isPending)send.mutate({id:selected,text})}
-  const pin=(id:string)=>{const next=pinned.includes(id)?pinned.filter(item=>item!==id):[...pinned,id];setPinned(next);localStorage.setItem('koreagent:pinned-conversations',JSON.stringify(next))}
-  const currentRun=runs.data?.find(item=>['running','pending'].includes(item.status))||runs.data?.[0]
-  const activeTask=tasks.data?.find(item=>['active','blocked','pending'].includes(item.status))||tasks.data?.[0]
-  return <div className="chat-layout">
-    {drawer&&<button className="drawer-scrim" aria-label="关闭会话列表" onClick={()=>setDrawer(false)}/>}
-    <aside className={`conversation-list ${drawer?'open':''}`} aria-label="会话列表">
-      <div className="conversation-title"><strong>会话</strong><div><button aria-label="新建会话" onClick={()=>create.mutate()}><Plus size={16}/></button><button className="mobile-only" aria-label="关闭会话列表" onClick={()=>setDrawer(false)}><X size={16}/></button></div></div>
-      <div className="conversation-scroll">{ordered.map(item=><div className={`conversation-row ${selected===item.id?'selected':''}`} key={item.id}><button aria-current={selected===item.id?'true':undefined} onClick={()=>{setSelected(item.id);setDrawer(false)}}><span>{item.title}</span><small>{item.message_count} 条消息</small></button><button aria-label={pinned.includes(item.id)?'取消置顶':'置顶会话'} title={pinned.includes(item.id)?'取消置顶':'置顶会话'} onClick={()=>pin(item.id)}>{pinned.includes(item.id)?<PinOff size={13}/>:<Pin size={13}/>}</button></div>)}</div>
-    </aside>
-    <section className="workspace">{!selected?<><button className="mobile-only empty-menu" onClick={()=>setDrawer(true)}><Menu size={16}/>会话列表</button><Empty icon={MessageSquare} title="开始新对话" hint="创建会话，然后告诉 KoreAgent Next 你想完成的结果。" action={<button className="primary" onClick={()=>create.mutate()}><Plus size={15}/>新建会话</button>}/></>:<>
-      <header className="workspace-head"><button className="mobile-only icon" aria-label="打开会话列表" onClick={()=>setDrawer(true)}><Menu size={18}/></button><div>{renaming?<RenameForm initial={detail.data?.conversation.title||''} save={value=>rename.mutate(value)} cancel={()=>setRenaming(false)}/>:<><h2>{detail.data?.conversation.title||'会话'}</h2><small>{send.isPending?'Agent 正在工作':`${tasks.data?.filter(item=>['active','blocked'].includes(item.status)).length||0} 个持续任务`}</small></>}</div><div className="row-actions"><button className="icon" aria-label="重命名会话" title="重命名" onClick={()=>setRenaming(true)}><Pencil size={15}/></button><button className="icon danger" aria-label="删除会话" title="删除会话" onClick={()=>{void confirmAction({title:'删除这个会话？',message:'会话及其消息将被删除，此操作无法撤销。',confirmLabel:'删除会话',destructive:true}).then(yes=>{if(yes)remove.mutate(selected)})}}><Trash2 size={16}/></button></div></header>
-      <TaskPanel task={activeTask} run={currentRun} onOpenRun={onOpenRun} recovering={recover.isPending} onRecover={id=>recover.mutate(id)}/>
-      {tasks.error&&<div className="chat-query-error" role="alert">任务进度加载失败。<button onClick={()=>tasks.refetch()}>重试</button></div>}
-      <div className="messages" aria-live="polite">{detail.isLoading?<Busy/>:detail.error?<div className="chat-query-error" role="alert">会话加载失败。<button onClick={()=>detail.refetch()}>重试</button></div>:detail.data?.messages.length?detail.data.messages.map((message,index)=><MessageBubble key={index} message={message}/>):<div className="starter-state"><Empty icon={Bot} title="空白会话" hint="选择一个起点，或直接输入你的目标。"/><div className="starter-prompts">{starterPrompts.map(prompt=><button key={prompt} onClick={()=>setInput(prompt)}>{prompt}<ChevronRight size={14}/></button>)}</div></div>}{live&&<LiveRun live={live}/>} {plan.data&&<PlanDecision task={plan.data} pending={decidePlan.isPending} decide={accepted=>decidePlan.mutate(accepted)}/>} {artifacts.data?.map(item=><ArtifactInline key={item.id} artifact={item}/>)}</div>
-      {pendingApproval&&<InlineApproval approval={pendingApproval} pending={approval.isPending} decide={(yes,scope)=>approval.mutate({id:pendingApproval.id,yes,scope})}/>} {send.error&&<ErrorBox error={send.error}/>} {recover.error&&<ErrorBox error={recover.error}/>}
-      <div className="composer"><textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit()}}} placeholder="输入消息；Enter 发送，Shift+Enter 换行" aria-label="消息内容"/><div className="composer-row"><select aria-label="运行模式" value={mode} onChange={e=>setMode(e.target.value as 'normal'|'plan')}><option value="normal">执行模式</option><option value="plan">计划模式</option></select><button className="primary" disabled={!input.trim()||send.isPending} onClick={submit}>{send.isPending?'运行中':'发送'}</button></div></div>
-      {live?.runId&&live.status==='running'&&<button className="floating-stop" disabled={interrupt.isPending} onClick={()=>{void confirmAction({title:'中断当前运行？',message:'当前执行将停止，已有进度会保存为检查点，可稍后恢复。',confirmLabel:'中断并保存'}).then(yes=>{if(yes)interrupt.mutate(live.runId)})}}><PauseCircle size={15}/>中断并保存检查点</button>}
-    </>}</section>
-  </div>
+function CommandPalette({ commands, close }: { commands: Command[]; close(): void }) {
+  const [term, setTerm] = useState('')
+  const [focused, setFocused] = useState(0)
+  const input = useRef<HTMLInputElement>(null)
+  const previousFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null)
+  useEffect(() => {
+    input.current?.focus()
+    return () => previousFocus.current?.focus()
+  }, [])
+  const items = commands.filter((item) =>
+    `${item.label} ${item.hint}`.toLowerCase().includes(term.trim().toLowerCase()),
+  )
+  useEffect(() => setFocused(0), [term])
+  const execute = (item: Command) => {
+    item.run()
+    close()
+  }
+  const key = (event: React.KeyboardEvent) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setFocused((value) => (value + 1) % Math.max(1, items.length))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setFocused((value) => (value - 1 + items.length) % Math.max(1, items.length))
+    } else if (event.key === 'Enter' && items[focused]) {
+      event.preventDefault()
+      execute(items[focused])
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      close()
+    } else if (event.key === 'Tab') {
+      const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input,button'))
+      const first = controls[0],
+        last = controls.at(-1)
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+  }
+  return (
+    <div
+      className="modal-back"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) close()
+      }}
+    >
+      <section
+        className="command-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="command-title"
+        onKeyDown={key}
+      >
+        <h2 id="command-title">操作面板</h2>
+        <label className="search-field">
+          <Search size={16} />
+          <input
+            ref={input}
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            placeholder="搜索页面或操作"
+            aria-label="搜索页面或操作"
+          />
+        </label>
+        <div role="listbox">
+          {items.map((item, index) => (
+            <button
+              role="option"
+              aria-selected={focused === index}
+              key={item.id}
+              className={focused === index ? 'active' : ''}
+              onMouseEnter={() => setFocused(index)}
+              onClick={() => execute(item)}
+            >
+              <Zap size={17} />
+              <span>{item.label}</span>
+              <small>{item.hint}</small>
+            </button>
+          ))}
+          {items.length === 0 && <p className="palette-empty">没有匹配的操作</p>}
+        </div>
+        <footer>
+          <span>↑ ↓ 选择</span>
+          <span>Enter 执行</span>
+        </footer>
+        <button className="close-palette" aria-label="关闭" onClick={close}>
+          <X size={16} />
+        </button>
+      </section>
+    </div>
+  )
 }
-function TaskPanel({task,run,onOpenRun,onRecover,recovering}:{task?:Task;run?:Run;onOpenRun(id:string):void;onRecover(id:string):void;recovering:boolean}){
-  if(!task&&!run)return null
-  const done=task?.steps.filter(step=>step.status==='completed').length||0
-  const total=task?.steps.length||0
-  const current=task?.steps.find(step=>['active','running','blocked'].includes(step.status))||task?.steps.find(step=>step.status==='pending')
-  return <section className="chat-task-panel" aria-label="当前任务进度"><div className="chat-task-heading"><div><strong>{task?.title||'当前运行'}</strong><small>{task?`${done}/${total} 步已完成${current?` · 当前：${current.title}`:''}`:`状态：${statusChinese(run?.status||'未知')}`}</small></div><div className="row-actions">{run&&<button onClick={()=>onOpenRun(run.id)}>查看运行 <ChevronRight size={14}/></button>}{run&&['interrupted','failed','cancelled'].includes(run.status)&&<button disabled={recovering} onClick={()=>onRecover(run.id)}><RefreshCw size={14}/>恢复</button>}</div></div>{task&&total>0&&<><progress max={total} value={done} aria-label="任务完成进度"/><ol>{task.steps.map(step=><li key={step.id}><Status value={step.status}/><span>{step.title}</span></li>)}</ol></>}</section>
+function ToastTray({ items, dismiss }: { items: Toast[]; dismiss(id: number): void }) {
+  return (
+    <div className="toast-viewport" aria-live="polite">
+      {items.map((item) => (
+        <div className={`toast toast-${item.tone}`} role="status" key={item.id}>
+          <span>{item.message}</span>
+          <button aria-label="关闭通知" onClick={() => dismiss(item.id)}>
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
 }
-function RenameForm({initial,save,cancel}:{initial:string;save(value:string):void;cancel():void}){const [value,setValue]=useState(initial);return <form className="rename-form" onSubmit={e=>{e.preventDefault();if(value.trim())save(value.trim())}}><input autoFocus value={value} onChange={e=>setValue(e.target.value)} aria-label="会话标题"/><button className="primary" type="submit">保存</button><button type="button" onClick={cancel}>取消</button></form>}
-function MessageBubble({message}:{message:Message}){return <article className={`message ${message.role}`}><div className="avatar">{message.role==='user'?'你':message.role==='assistant'?'K':'T'}</div><div className="message-body">{message.name&&<small>{message.name}</small>}{message.reasoning&&<details><summary>思考过程</summary><pre>{message.reasoning}</pre></details>}<ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content||''}</ReactMarkdown></div></article>}
-function LiveRun({live}:{live:LiveRunState}){return <article className="message assistant live-message"><div className="avatar">K</div><div className="message-body">{live.reasoning&&<details><summary>正在推理</summary><pre>{live.reasoning}</pre></details>}{live.content?<ReactMarkdown remarkPlugins={[remarkGfm]}>{live.content}</ReactMarkdown>:<div className="thinking"><span/><span/><span/> 正在组织下一步</div>}{live.budgetStatus&&<div className="budget-notice">运行预算：{live.budgetStatus}</div>}{live.toolActivity.length>0&&<div className="tool-activity">{live.toolActivity.map(tool=><div key={tool.id}><Status value={tool.status}/><span>{tool.name}</span>{tool.summary&&<small>{tool.summary}</small>}</div>)}</div>}</div></article>}
-function ArtifactInline({artifact}:{artifact:Artifact}){return <article className="artifact-inline"><FileOutput size={18}/><div><strong>{artifact.title}</strong><small>{artifact.description||artifact.filename||'Agent 交付物'}</small></div>{artifact.kind==='file'?<a className="button" href={artifactContentUrl(artifact.id)}>下载</a>:<button onClick={()=>artifact.source_url&&openUrl(artifact.source_url)}>打开</button>}</article>}
-function InlineApproval({approval,pending,decide}:{approval:Approval;pending:boolean;decide(yes:boolean,scope:PermissionScope):void}){const [scope,setScope]=useState<PermissionScope>('once');return <section className="inline-approval" role="alert"><div><strong>等待允许：{approvalTitle(approval)}</strong><p>{approval.reason}</p><small>记住授权仅适用于工具和完整参数都相同的操作；换一个命令或内容需要重新审批。</small></div><div><select value={scope} onChange={e=>setScope(e.target.value as PermissionScope)} aria-label="允许范围">{(approval.available_scopes||['once']).map(item=><option value={item} key={item}>{permissionScopeLabel(item)}</option>)}</select><button disabled={pending} onClick={()=>decide(false,'once')}>拒绝</button><button className="primary" disabled={pending} onClick={()=>decide(true,scope)}>允许</button></div></section>}
-function PlanDecision({task,pending,decide}:{task:Task;pending:boolean;decide(accepted:boolean):void}){return <section className="plan-decision"><header><div><strong>{task.title}</strong><small>计划需要确认后才会进入执行状态</small></div><Status value={task.status}/></header><ol>{task.steps.map(step=><li key={step.id}><span>{step.title}</span>{step.description&&<small>{step.description}</small>}</li>)}</ol>{task.status==='pending'&&<footer><button disabled={pending} onClick={()=>decide(false)}>退回计划</button><button className="primary" disabled={pending} onClick={()=>decide(true)}>接受计划</button></footer>}</section>}
-
-
-function Automations(){const confirmAction=useConfirmAction();const query=useQuery({queryKey:['automations'],queryFn:()=>rpc.call<{automations:Automation[]}>('automation.list',{}).then(x=>x.automations),refetchInterval:30000});const [open,setOpen]=useState(false);const action=useMutation({mutationFn:({method,id}:{method:string;id:string})=>rpc.call(method,{automation_id:id}),onSuccess:()=>query.refetch()});return <Page title="自动化" subtitle="按明确的时区定时或周期运行 Agent 工作。" actions={<button className="primary" onClick={()=>setOpen(true)}><Plus size={15}/>新建</button>}>{open&&<AutomationForm close={()=>setOpen(false)} done={()=>{setOpen(false);query.refetch()}}/>}<div className="card-grid">{query.data?.map(item=><article className="card" key={item.id}><div className="card-head"><Clock3/><Status value={item.status}/></div><h3>{item.title}</h3><p>{item.prompt}</p><dl><dt>计划</dt><dd>{scheduleLabel(item)}</dd><dt>时区</dt><dd>{item.schedule.timezone}</dd><dt>下次运行</dt><dd>{item.next_run_at?new Date(item.next_run_at).toLocaleString():'—'}</dd><dt>上次运行</dt><dd>{item.last_run_at?new Date(item.last_run_at).toLocaleString():'尚未运行'}</dd></dl><div className="card-actions">{item.status==='active'?<button onClick={()=>action.mutate({method:'automation.pause',id:item.id})}>暂停</button>:item.status==='paused'?<button onClick={()=>action.mutate({method:'automation.resume',id:item.id})}>恢复</button>:null}<button className="danger" onClick={()=>{void confirmAction({title:`取消“${item.title}”？`,message:'这项自动化将停止后续触发，已经创建的运行不受影响。',confirmLabel:'取消自动化',destructive:true}).then(yes=>{if(yes)action.mutate({method:'automation.cancel',id:item.id})})}}>取消</button></div></article>)}</div>{query.error&&<ErrorBox error={query.error}/>} {!query.isLoading&&!query.data?.length&&<Empty icon={Clock3} title="暂无自动化" hint="创建一次性、间隔或 Cron 工作。"/>}</Page>}
-function scheduleLabel(item:Automation){if(item.schedule.kind==='once')return`一次 · ${item.schedule.run_at?new Date(item.schedule.run_at).toLocaleString():'未设置'}`;if(item.schedule.kind==='interval')return`每 ${item.schedule.interval_seconds} 秒`;return`Cron ${item.schedule.cron_expr}`}
-function AutomationForm({close,done}:{close():void;done():void}){const [form,setForm]=useState({title:'',prompt:'',kind:'once',run_at:'',interval_seconds:'3600',cron_expr:'0 9 * * *',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'Asia/Shanghai'});const title=useRef<HTMLInputElement>(null);useEffect(()=>{title.current?.focus();const esc=(event:KeyboardEvent)=>{if(event.key==='Escape')close()};window.addEventListener('keydown',esc);return()=>window.removeEventListener('keydown',esc)},[close]);const mutation=useMutation({mutationFn:()=>rpc.call('automation.create',{...form,run_at:form.run_at?new Date(form.run_at).toISOString():undefined,interval_seconds:Number(form.interval_seconds)||undefined}),onSuccess:done});return <div className="modal-back" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><form className="modal" role="dialog" aria-modal="true" aria-labelledby="automation-title" onSubmit={event=>{event.preventDefault();mutation.mutate()}}><h2 id="automation-title">新建自动化</h2><label>标题<input ref={title} value={form.title} onChange={e=>setForm({...form,title:e.target.value})} required/></label><label>任务<textarea value={form.prompt} onChange={e=>setForm({...form,prompt:e.target.value})} required/></label><label>类型<select value={form.kind} onChange={e=>setForm({...form,kind:e.target.value})}><option value="once">一次</option><option value="interval">间隔</option><option value="cron">Cron</option></select></label>{form.kind==='once'&&<label>运行时间<input type="datetime-local" value={form.run_at} onChange={e=>setForm({...form,run_at:e.target.value})} required/></label>}{form.kind==='interval'&&<label>间隔秒数<input type="number" min="1" value={form.interval_seconds} onChange={e=>setForm({...form,interval_seconds:e.target.value})} required/></label>}{form.kind==='cron'&&<label>Cron 表达式<input value={form.cron_expr} onChange={e=>setForm({...form,cron_expr:e.target.value})} required/></label>}<label>IANA 时区<input value={form.timezone} onChange={e=>setForm({...form,timezone:e.target.value})} required/><small>例如 Asia/Shanghai</small></label><div className="modal-actions"><button type="button" onClick={close}>取消</button><button className="primary" type="submit" disabled={mutation.isPending}>{mutation.isPending?'创建中':'创建'}</button></div>{mutation.error&&<ErrorBox error={mutation.error}/>}</form></div>}
-
-function Approvals(){const query=useQuery({queryKey:['approvals'],queryFn:()=>rpc.call<{approvals:Approval[]}>('approval.list',{limit:100}).then(x=>x.approvals),refetchInterval:15000});const [scopes,setScopes]=useState<Record<string,PermissionScope>>({});const action=useMutation({mutationFn:({id,yes,scope}:{id:string;yes:boolean;scope:PermissionScope})=>rpc.call(yes?'approval.approve':'approval.deny',{approval_id:id,scope}),onSuccess:()=>query.refetch()});return <Page title="审批" subtitle="用可读信息审查敏感操作，并选择权限持续范围。"><div className="stack">{query.data?.map(item=><article className="approval" key={item.id}><div><div className="approval-heading"><Status value={item.status}/><code>{item.tool_name}</code></div><h3>{approvalTitle(item)}</h3><p>{item.reason}</p><small>Run {item.run_id?.slice(0,8)||'—'} · {new Date(item.created_at).toLocaleString()}{item.resolution_scope?` · ${permissionScopeLabel(item.resolution_scope)}`:''}</small><dl className="approval-facts">{approvalFacts(item.arguments).map(([key,value])=><div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl><details><summary>查看原始参数</summary><pre>{JSON.stringify(item.arguments,null,2)}</pre></details></div>{item.status==='pending'&&<div className="approval-actions"><select value={scopes[item.id]||'once'} onChange={e=>setScopes({...scopes,[item.id]:e.target.value as PermissionScope})} aria-label="允许范围">{(item.available_scopes||['once','run','conversation','global']).map(scope=><option value={scope} key={scope}>{permissionScopeLabel(scope)}</option>)}</select><button className="danger" disabled={action.isPending} onClick={()=>action.mutate({id:item.id,yes:false,scope:'once'})}><XCircle size={15}/>拒绝</button><button className="primary" disabled={action.isPending} onClick={()=>action.mutate({id:item.id,yes:true,scope:scopes[item.id]||'once'})}><CheckCircle2 size={15}/>允许</button></div>}</article>)}</div>{query.error&&<ErrorBox error={query.error}/>} {!query.isLoading&&!query.data?.length&&<Empty icon={ShieldCheck} title="没有审批请求" hint="需要确认的工具操作会出现在这里。"/>}</Page>}
-
-function Artifacts(){const query=useQuery({queryKey:['artifacts'],queryFn:()=>rpc.call<{artifacts:Artifact[]}>('artifact.list',{limit:100}).then(x=>x.artifacts)});return <Page title="交付物" subtitle="查看 Agent 发布的文件和链接。"><div className="card-grid">{query.data?.map(item=><article className="card" key={item.id}><FileOutput/><h3>{item.title}</h3><p>{item.description||item.filename||item.source_url}</p><small>{item.kind==='file'?formatBytes(item.size_bytes):'外部链接'} · {new Date(item.created_at).toLocaleString()}</small>{item.kind==='url'&&item.source_url?<button className="primary" onClick={()=>openUrl(item.source_url!)}><ExternalLink size={14}/>打开链接</button>:<a className="button primary" href={artifactContentUrl(item.id)}>下载文件</a>}</article>)}</div>{query.error&&<ErrorBox error={query.error}/>} {!query.isLoading&&!query.data?.length&&<Empty icon={FileOutput} title="暂无交付物" hint="Agent 发布的文件和链接会显示在这里。"/>}</Page>}
-function openUrl(url:string){if(window.koreNext?.openExternal)window.koreNext.openExternal(url);else window.open(url,'_blank','noopener,noreferrer')}
-function formatBytes(value:number){if(value<1024)return`${value} B`;if(value<1048576)return`${(value/1024).toFixed(1)} KB`;return`${(value/1048576).toFixed(1)} MB`}
-
-function Computer(){const status=useQuery({queryKey:['computer'],queryFn:()=>rpc.call<any>('computer.status',{}),refetchInterval:15000});const observation=useQuery({queryKey:['observation'],queryFn:()=>rpc.call<any>('computer.latest_observation',{}),refetchInterval:10000});const permission=useMutation({mutationFn:(name:string)=>rpc.call('computer.request_permission',{permission:name}),onSuccess:()=>status.refetch()});return <Page title="电脑" subtitle="查看 macOS Computer Helper 的状态、权限、租约和最新观察。"><div className="computer-grid"><article className="card"><Cpu size={24}/><h3>Computer Runtime</h3>{status.isLoading?<Busy/>:<><Status value={status.data?.available?'available':'unavailable'}/><dl><dt>平台</dt><dd>{status.data?.platform}</dd><dt>运行时</dt><dd>{status.data?.runtime||'—'}</dd><dt>辅助功能</dt><dd>{status.data?.permissions?.accessibility}</dd><dt>屏幕录制</dt><dd>{status.data?.permissions?.screen_recording}</dd><dt>机器租约</dt><dd>{status.data?.lease?.busy?`Run ${status.data.lease.owner_run_id?.slice(0,8)}`:'空闲'}</dd></dl>{status.data?.platform==='darwin'&&<div className="permission-actions"><button disabled={permission.isPending||status.data?.permissions?.accessibility==='granted'} onClick={()=>permission.mutate('accessibility')}>请求辅助功能权限</button><button disabled={permission.isPending||status.data?.permissions?.screen_recording==='granted'} onClick={()=>permission.mutate('screen_recording')}>请求屏幕录制权限</button></div>}<p>{status.data?.reason}</p>{permission.error&&<ErrorBox error={permission.error}/>}</>}</article><article className="observation"><h3>最新观察</h3>{observation.data?.observation?<><img alt="Computer Helper 最新桌面观察" src={computerScreenshotUrl(observation.data.observation.id)}/><div className="observation-summary"><span>{observation.data.observation.elements?.length||0} 个界面元素</span><span>{observation.data.observation.windows?.length||0} 个窗口</span></div><details><summary>查看元素树数据</summary><pre>{JSON.stringify(observation.data.observation,null,2)}</pre></details></>:<Empty icon={Cpu} title="没有观察数据" hint="运行电脑控制任务后会显示截图和元素树。"/>}</article></div></Page>}
-
-function Memory(){const query=useQuery({queryKey:['memory'],queryFn:()=>rpc.call<any>('memory.list',{})});const tasks=useQuery({queryKey:['tasks'],queryFn:()=>rpc.call<{tasks:Task[]}>('task.list',{limit:100}).then(x=>x.tasks)});const [tab,setTab]=useState<'active'|'archived'>('active');const memories:MemoryItem[]=query.data?.[tab]||[];return <Page title="记忆" subtitle="查看核心事实、活跃与归档的长期记忆，以及持续任务。"><div className="memory-layout"><section><div className="memory-title"><h2>核心记忆</h2><small>最近维护：{query.data?.maintenance?.last_run_at?new Date(query.data.maintenance.last_run_at).toLocaleString():'尚未运行'}</small></div>{query.data?.core_entries?.length?<dl className="core-entries">{query.data.core_entries.map((entry:any)=><div key={entry.key}><dt>{entry.key}</dt><dd>{entry.value}<small>修订 {entry.revision}</small></dd></div>)}</dl>:<div className="core-memory">尚未形成核心记忆。</div>}<div className="memory-tabs"><button className={tab==='active'?'active':''} onClick={()=>setTab('active')}>活跃 {query.data?.active_count||0}</button><button className={tab==='archived'?'active':''} onClick={()=>setTab('archived')}>归档 {query.data?.archived?.length||0}</button></div><div className="stack">{memories.map(item=><article className="memory-card" key={item.id}><Status value={item.status}/><h3>{item.title}</h3><p>{item.summary}</p><small>访问 {item.access_count} 次 · 修订 {item.revision} · {new Date(item.updated_at).toLocaleString()}</small></article>)}</div>{!memories.length&&<Empty icon={Brain} title={tab==='active'?'没有活跃记忆':'没有归档记忆'} hint="稳定偏好与长期事实会在运行结束后经过反思写入。"/>}</section><section><h2>持续任务</h2><div className="stack">{tasks.data?.map(task=><article className="memory-card" key={task.id}><Status value={task.status}/><h3>{task.title}</h3><p>{task.description||task.goal}</p><ol className="task-steps">{task.steps.map(step=><li key={step.id}><Status value={step.status}/>{step.title}</li>)}</ol><small>{new Date(task.updated_at).toLocaleString()}</small></article>)}</div>{!tasks.data?.length&&<Empty title="暂无持续任务" hint="Agent 创建的计划和任务会显示在这里。"/>}</section></div></Page>}

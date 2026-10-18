@@ -11,8 +11,8 @@ from ..tasks import TaskService
 from .artifacts import ArtifactService
 from .automations import AutomationService
 from .conversations import ConversationService
-from .extensions import ExtensionService
 from .runs import RunStore
+from .skills import SkillService
 
 
 class ServiceToolRouter:
@@ -26,7 +26,7 @@ class ServiceToolRouter:
         memory: MemoryService,
         tasks: TaskService,
         evidence: EvidenceStore,
-        extensions: ExtensionService,
+        skills: SkillService,
         automations: AutomationService,
         artifacts: ArtifactService,
     ):
@@ -36,11 +36,13 @@ class ServiceToolRouter:
         self.memory = memory
         self.tasks = tasks
         self.evidence = evidence
-        self.extensions = extensions
+        self.skills = skills
         self.automations = automations
         self.artifacts = artifacts
 
-    async def publish_url_artifact(self, *, url: str, title: str, description: str | None, run_id: str) -> dict[str, Any]:
+    async def publish_url_artifact(
+        self, *, url: str, title: str, description: str | None, run_id: str
+    ) -> dict[str, Any]:
         return await self.artifacts.publish_url(url=url, title=title, description=description, run_id=run_id)
 
     async def tool_call(self, name: str, arguments: dict[str, Any], *, run_id: str, mode: str) -> Any:
@@ -53,7 +55,8 @@ class ServiceToolRouter:
             query = str(required(arguments, "query"))
             limit = max(1, min(int(arguments.get("limit", 20)), 100))
             rows = await self.db.fetchall(
-                "SELECT id,role,content,name,created_at FROM messages WHERE conversation_id=? AND content LIKE ? ORDER BY id DESC LIMIT ?",
+                "SELECT id,role,content,name,created_at FROM messages "
+                "WHERE conversation_id=? AND content LIKE ? ORDER BY id DESC LIMIT ?",
                 (conversation_id, f"%{query}%", limit),
             )
             return {"matches": [dict(row) for row in rows]}
@@ -63,7 +66,8 @@ class ServiceToolRouter:
             offset = max(0, int(arguments.get("offset", 0)))
             limit = max(1, min(int(arguments.get("limit", 50)), 200))
             rows = await self.db.fetchall(
-                "SELECT id,role,content,name,tool_call_id,reasoning,created_at FROM messages WHERE conversation_id=? ORDER BY id LIMIT ? OFFSET ?",
+                "SELECT id,role,content,name,tool_call_id,reasoning,created_at FROM messages "
+                "WHERE conversation_id=? ORDER BY id LIMIT ? OFFSET ?",
                 (conversation_id, limit, offset),
             )
             return {"messages": [dict(row) for row in rows], "offset": offset}
@@ -94,7 +98,11 @@ class ServiceToolRouter:
                 raise ValueError("memory not found") from exc
         if name == "memory_archive":
             try:
-                return {"memory": await self.memory.archive(str(required(arguments, "memory_id")), str(arguments.get("reason") or "agent_tool"))}
+                return {
+                    "memory": await self.memory.archive(
+                        str(required(arguments, "memory_id")), str(arguments.get("reason") or "agent_tool")
+                    )
+                }
             except KeyError as exc:
                 raise ValueError("memory not found") from exc
         if name == "core_memory_update":
@@ -126,7 +134,9 @@ class ServiceToolRouter:
             except KeyError as exc:
                 raise ValueError("task not found") from exc
         if name == "task_list":
-            tasks = await self.tasks.list(limit=max(1, min(int(arguments.get("limit", 100)), 500)), status=arguments.get("status"))
+            tasks = await self.tasks.list(
+                limit=max(1, min(int(arguments.get("limit", 100)), 500)), status=arguments.get("status")
+            )
             return {"tasks": tasks, "count": len(tasks)}
         if name in {"skill_read", "skill_resource_read"}:
             skill_name = str(required(arguments, "name"))
@@ -134,15 +144,21 @@ class ServiceToolRouter:
             skill = next(
                 (
                     item
-                    for item in sorted(await self.extensions.skills(), key=lambda value: value.get("scope") != "project")
-                    if item.get("name") == skill_name and item.get("enabled") and (scope is None or item.get("scope") == scope)
+                    for item in sorted(await self.skills.skills(), key=lambda value: value.get("scope") != "project")
+                    if item.get("name") == skill_name
+                    and item.get("enabled")
+                    and (scope is None or item.get("scope") == scope)
                 ),
                 None,
             )
             if not skill:
                 raise ValueError("skill not found or disabled")
             root = Path(skill["location"]).parent.resolve()
-            resource = Path(skill["location"]).resolve() if name == "skill_read" else (root / str(required(arguments, "path"))).resolve()
+            resource = (
+                Path(skill["location"]).resolve()
+                if name == "skill_read"
+                else (root / str(required(arguments, "path"))).resolve()
+            )
             try:
                 resource.relative_to(root)
             except ValueError as exc:

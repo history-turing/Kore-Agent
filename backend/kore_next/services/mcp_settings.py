@@ -52,8 +52,12 @@ class McpSettingsService:
         network = sandbox.get("network", "denied")
         host_mode = filesystem == "host" and network == "allowed"
         native_sandbox = sys.platform == "darwin" and not host_mode
-        supported = host_mode or (native_sandbox and network in {"allowed", "denied"} and filesystem in {"workspace", "readonly"})
-        supported = supported and not any(sandbox.get(key) for key in ("readable_roots", "writable_roots", "allowed_domains"))
+        supported = host_mode or (
+            native_sandbox and network in {"allowed", "denied"} and filesystem in {"workspace", "readonly"}
+        )
+        supported = supported and not any(
+            sandbox.get(key) for key in ("readable_roots", "writable_roots", "allowed_domains")
+        )
         if item.get("enabled", True) and not supported and not runtime:
             state = "unavailable"
             error = "所选沙箱策略在此平台不可用，进程不会启动"
@@ -67,7 +71,9 @@ class McpSettingsService:
             "last_call_at": runtime.last_call_at if runtime else None,
             "restart_count": runtime.restart_count if runtime else 0,
             "sandboxed": native_sandbox,
-            "sandbox_backend": "macos-seatbelt" if native_sandbox and supported else ("host" if host_mode and supported else "unavailable"),
+            "sandbox_backend": "macos-seatbelt"
+            if native_sandbox and supported
+            else ("host" if host_mode and supported else "unavailable"),
         }
 
     async def mcp_add(self, params: dict[str, Any]) -> dict[str, Any]:

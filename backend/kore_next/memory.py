@@ -67,7 +67,13 @@ class MemoryService:
         return memory
 
     async def update(
-        self, memory_id: str, *, title: str | None = None, summary: str | None = None, content: str | None = None, reason: str = "agent_tool"
+        self,
+        memory_id: str,
+        *,
+        title: str | None = None,
+        summary: str | None = None,
+        content: str | None = None,
+        reason: str = "agent_tool",
     ) -> dict[str, Any]:
         memory = await self.get(memory_id, touch=False)
         if title is not None:
@@ -149,28 +155,46 @@ class MemoryService:
         memories.sort(key=self._retention_score)
         candidates = memories[: min(len(memories), max(20, len(memories) - self.max_active + 10))]
         if model is None:
-            await self.db.set_json("memory_maintenance_state", {
-                "last_run_at": now(), "archived": 0, "deferred": len(memories) - self.max_active,
-                "reason": "maintenance_model_unavailable",
-            })
+            await self.db.set_json(
+                "memory_maintenance_state",
+                {
+                    "last_run_at": now(),
+                    "archived": 0,
+                    "deferred": len(memories) - self.max_active,
+                    "reason": "maintenance_model_unavailable",
+                },
+            )
             return []
         prompt = (
             "Memory capacity is full. Decide which of the listed candidate memories to archive or defer. "
             "Never invent IDs. Prefer defer when uncertain. Return strict JSON: "
             '{"decisions":[{"id":"candidate-id","action":"archive|defer","reason":"..."}]}. '
             f"Archive at most {len(memories) - self.max_active} memories. Archived memories remain recoverable.\n\n"
-            + dumps([{
-                "id": item["id"], "title": item.get("title"), "summary": item.get("summary"),
-                "access_count": item.get("access_count"), "updated_at": item.get("updated_at"),
-            } for item in candidates])
+            + dumps(
+                [
+                    {
+                        "id": item["id"],
+                        "title": item.get("title"),
+                        "summary": item.get("summary"),
+                        "access_count": item.get("access_count"),
+                        "updated_at": item.get("updated_at"),
+                    }
+                    for item in candidates
+                ]
+            )
         )
         try:
             decisions = self._json_object(await model(prompt)).get("decisions", [])
         except Exception as exc:
-            await self.db.set_json("memory_maintenance_state", {
-                "last_run_at": now(), "archived": 0, "deferred": len(memories) - self.max_active,
-                "reason": f"model_failed: {type(exc).__name__}",
-            })
+            await self.db.set_json(
+                "memory_maintenance_state",
+                {
+                    "last_run_at": now(),
+                    "archived": 0,
+                    "deferred": len(memories) - self.max_active,
+                    "reason": f"model_failed: {type(exc).__name__}",
+                },
+            )
             return []
         candidate_ids = {item["id"] for item in candidates}
         archived = []
@@ -183,11 +207,17 @@ class MemoryService:
                 continue
             seen.add(memory_id)
             if decision.get("action") == "archive" and len(archived) < len(memories) - self.max_active:
-                archived.append(await self.archive(memory_id, f"capacity_maintenance: {str(decision.get('reason') or '')[:200]}"))
-        await self.db.set_json("memory_maintenance_state", {
-            "last_run_at": now(), "archived": len(archived),
-            "deferred": max(0, len(memories) - len(archived) - self.max_active),
-        })
+                archived.append(
+                    await self.archive(memory_id, f"capacity_maintenance: {str(decision.get('reason') or '')[:200]}")
+                )
+        await self.db.set_json(
+            "memory_maintenance_state",
+            {
+                "last_run_at": now(),
+                "archived": len(archived),
+                "deferred": max(0, len(memories) - len(archived) - self.max_active),
+            },
+        )
         return archived
 
     @staticmethod
@@ -215,7 +245,8 @@ class MemoryService:
 
     async def reflect(self, *, user_text: str, assistant_text: str, model: ReflectionModel) -> list[dict[str, Any]]:
         prompt = (
-            "Extract only stable user preferences, durable facts, important decisions, or reusable knowledge from this run. "
+            "Extract only stable user preferences, durable facts, important decisions, "
+            "or reusable knowledge from this run. "
             "Do not store transient task details. Return strict JSON: "
             '{"memories":[{"title":"...","summary":"...","content":"..."}],"core_updates":{"key":"value"}}.\n\n'
             f"USER:\n{user_text[-12000:]}\n\nASSISTANT:\n{assistant_text[-12000:]}"
@@ -276,10 +307,15 @@ class MemoryService:
         access = int(memory.get("access_count", 0))
         updated = str(memory.get("updated_at", ""))
         try:
-            age_days = max(0.0, (datetime.now(UTC) - datetime.fromisoformat(updated.replace("Z", "+00:00"))).total_seconds() / 86400)
+            age_days = max(
+                0.0,
+                (datetime.now(UTC) - datetime.fromisoformat(updated.replace("Z", "+00:00"))).total_seconds() / 86400,
+            )
         except (TypeError, ValueError):
             age_days = 365.0
-        score = math.log1p(access) * 2.0 + max(0.0, 4.0 - age_days / 30.0) + min(2.0, int(memory.get("revision", 1)) / 3)
+        score = (
+            math.log1p(access) * 2.0 + max(0.0, 4.0 - age_days / 30.0) + min(2.0, int(memory.get("revision", 1)) / 3)
+        )
         return score, updated
 
     @staticmethod

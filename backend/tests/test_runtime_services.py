@@ -49,13 +49,19 @@ async def test_context_compacts_old_rounds_and_persists_summary(database: Databa
 
 async def test_step_context_compacts_growing_tool_history(database: Database):
     manager = ContextManager(database)
-    messages = [{"role": "system", "content": "Follow the user's task."}, {"role": "user", "content": "Analyze the files."}]
+    messages = [
+        {"role": "system", "content": "Follow the user's task."},
+        {"role": "user", "content": "Analyze the files."},
+    ]
     for index in range(90):
         call_id = f"call-{index}"
         messages.append({"role": "assistant", "content": "", "tool_calls": [{"id": call_id, "name": "read_file"}]})
         messages.append({"role": "tool", "tool_call_id": call_id, "content": f"result-{index} " + "x" * 4_000})
     decision = await manager.prepare_step(
-        messages=messages, provider="openai", model="small-context-model", tool_schema_tokens=500,
+        messages=messages,
+        provider="openai",
+        model="small-context-model",
+        tool_schema_tokens=500,
     )
     assert decision.compacted is True
     assert decision.estimated_tokens <= decision.max_input_tokens
@@ -116,7 +122,13 @@ async def test_memory_reflection_deduplicates_and_updates_core(database: Databas
     async def model(_: str) -> str:
         return dumps(
             {
-                "memories": [{"title": "Preferred language", "summary": "Chinese replies", "content": "The user prefers Chinese."}],
+                "memories": [
+                    {
+                        "title": "Preferred language",
+                        "summary": "Chinese replies",
+                        "content": "The user prefers Chinese.",
+                    }
+                ],
                 "core_updates": {"response_language": "Chinese"},
             }
         )
@@ -138,15 +150,21 @@ async def test_memory_maintenance_only_archives_model_selected_candidates(databa
 
     async def failed_model(_: str) -> str:
         raise RuntimeError("offline")
+
     assert await service.maintain(failed_model) == []
     assert (await service.list())["active_count"] == 2
 
     async def decision(_: str) -> str:
-        return dumps({"decisions": [
-            {"id": "invented", "action": "archive"},
-            {"id": first["id"], "action": "archive", "reason": "obsolete"},
-            {"id": second["id"], "action": "archive"},
-        ]})
+        return dumps(
+            {
+                "decisions": [
+                    {"id": "invented", "action": "archive"},
+                    {"id": first["id"], "action": "archive", "reason": "obsolete"},
+                    {"id": second["id"], "action": "archive"},
+                ]
+            }
+        )
+
     archived = await service.maintain(decision)
     assert [item["id"] for item in archived] == [first["id"]]
     listing = await service.list()
@@ -158,13 +176,33 @@ async def test_skill_learning_never_auto_promotes(database: Database):
     stamp = now()
     await database.execute(
         "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ("run1", None, "completed", "Create a report", stamp, stamp, stamp, stamp, None, "completed", None, None, None, None, None, "normal"),
+        (
+            "run1",
+            None,
+            "completed",
+            "Create a report",
+            stamp,
+            stamp,
+            stamp,
+            stamp,
+            None,
+            "completed",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "normal",
+        ),
     )
     for sequence, payload in enumerate(
         (
             {"type": "tool_call", "tool_call": {"id": "a", "name": "read_file", "arguments": {"path": "input.md"}}},
             {"type": "tool_result", "tool_result": {"tool_call_id": "a", "success": True}},
-            {"type": "tool_call", "tool_call": {"id": "b", "name": "artifact_publish", "arguments": {"path": "report.md"}}},
+            {
+                "type": "tool_call",
+                "tool_call": {"id": "b", "name": "artifact_publish", "arguments": {"path": "report.md"}},
+            },
             {"type": "tool_result", "tool_result": {"tool_call_id": "b", "success": True}},
         ),
         1,
@@ -181,10 +219,29 @@ async def test_skill_learning_never_auto_promotes(database: Database):
     assert second is None
     await database.execute(
         "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ("run2", None, "completed", "Create a report", stamp, stamp, stamp, stamp, None, "completed", None, None, None, None, None, "normal"),
+        (
+            "run2",
+            None,
+            "completed",
+            "Create a report",
+            stamp,
+            stamp,
+            stamp,
+            stamp,
+            None,
+            "completed",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "normal",
+        ),
     )
     for sequence in range(1, 5):
-        row = await database.fetchone("SELECT type,data_json FROM events WHERE run_id='run1' AND sequence=?", (sequence,))
+        row = await database.fetchone(
+            "SELECT type,data_json FROM events WHERE run_id='run1' AND sequence=?", (sequence,)
+        )
         await database.execute(
             "INSERT INTO events VALUES(?,?,?,?,?,?)",
             (f"run2-e{sequence}", "run2", sequence, row["type"], stamp, row["data_json"]),
@@ -210,14 +267,18 @@ async def test_windows_workspace_processes_fail_before_spawn(tmp_path: Path, mon
     import kore_next.sandbox as sandbox_module
 
     monkeypatch.setattr(sandbox_module.sys, "platform", "win32")
+
     async def unexpected_spawn(*_args, **_kwargs):
         pytest.fail("sandboxed process was spawned")
+
     monkeypatch.setattr(sandbox_module.asyncio, "create_subprocess_exec", unexpected_spawn)
     monkeypatch.setattr(mcp_module.asyncio, "create_subprocess_exec", unexpected_spawn)
     supervisor = SandboxSupervisor(tmp_path)
     with pytest.raises(SandboxError, match="unavailable"):
         await supervisor.run("cmd", ["/c", "echo unsafe"], filesystem="workspace")
-    server = McpProcess({"command": "cmd", "name": "test", "sandbox": {"filesystem": "workspace", "network": "denied"}}, supervisor)
+    server = McpProcess(
+        {"command": "cmd", "name": "test", "sandbox": {"filesystem": "workspace", "network": "denied"}}, supervisor
+    )
     with pytest.raises(SandboxError, match="unavailable"):
         await server.start()
     launch = supervisor.prepare_launch("cmd", ["/c", "echo allowed"], filesystem="host", network="allowed")
@@ -291,27 +352,44 @@ async def test_permission_rules_are_scoped_and_do_not_store_secret_values(databa
 async def test_permission_rules_never_match_legacy_or_other_shell_arguments(database: Database):
     store = PermissionRuleStore(database, signing_key=b"b" * 32)
     await store.add(
-        tool_name="shell", effect="allow", scope="global", scope_id="*",
-        arguments={"command": "echo safe"}, description="Exact shell command",
+        tool_name="shell",
+        effect="allow",
+        scope="global",
+        scope_id="*",
+        arguments={"command": "echo safe"},
+        description="Exact shell command",
     )
-    assert (await store.evaluate(tool_name="shell", conversation_id="c", run_id="r", arguments={"command": "echo safe"})).effect == "allow"
-    assert (await store.evaluate(tool_name="shell", conversation_id="c", run_id="r", arguments={"command": "echo unsafe"})).effect == "ask"
+    assert (
+        await store.evaluate(tool_name="shell", conversation_id="c", run_id="r", arguments={"command": "echo safe"})
+    ).effect == "allow"
+    assert (
+        await store.evaluate(tool_name="shell", conversation_id="c", run_id="r", arguments={"command": "echo unsafe"})
+    ).effect == "ask"
     await database.execute(
-        "INSERT INTO permission_rules(id,tool_name,effect,scope,scope_id,matcher_json,description,created_at) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO permission_rules(id,tool_name,effect,scope,scope_id,"
+        "matcher_json,description,created_at) VALUES(?,?,?,?,?,?,?,?)",
         ("old", "shell", "allow", "run", "r", "{}", "Legacy wildcard", "9999-01-01T00:00:00Z"),
     )
-    assert (await store.evaluate(tool_name="shell", conversation_id="c", run_id="r", arguments={"command": "echo unsafe"})).effect == "ask"
+    assert (
+        await store.evaluate(tool_name="shell", conversation_id="c", run_id="r", arguments={"command": "echo unsafe"})
+    ).effect == "ask"
 
 
 async def test_permission_rules_match_empty_arguments_and_scope_priority(database: Database):
     store = PermissionRuleStore(database, signing_key=b"c" * 32)
     await store.add(tool_name="read", effect="allow", scope="global", scope_id="*", arguments={}, description="global")
-    await store.add(tool_name="read", effect="deny", scope="conversation", scope_id="c", arguments={}, description="conversation")
+    await store.add(
+        tool_name="read", effect="deny", scope="conversation", scope_id="c", arguments={}, description="conversation"
+    )
     await store.add(tool_name="read", effect="allow", scope="run", scope_id="r", arguments={}, description="run")
     assert (await store.evaluate(tool_name="read", conversation_id="c", run_id="r", arguments={})).effect == "allow"
     assert (await store.evaluate(tool_name="read", conversation_id="c", run_id="other", arguments={})).effect == "deny"
-    assert (await store.evaluate(tool_name="read", conversation_id="other", run_id="other", arguments={})).effect == "allow"
-    assert (await store.evaluate(tool_name="read", conversation_id="c", run_id="r", arguments={"extra": 1})).effect == "ask"
+    assert (
+        await store.evaluate(tool_name="read", conversation_id="other", run_id="other", arguments={})
+    ).effect == "allow"
+    assert (
+        await store.evaluate(tool_name="read", conversation_id="c", run_id="r", arguments={"extra": 1})
+    ).effect == "ask"
 
 
 async def test_evidence_keeps_raw_output_and_filters_before_limit(database: Database):
@@ -319,15 +397,35 @@ async def test_evidence_keeps_raw_output_and_filters_before_limit(database: Data
     await database.execute(
         "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "run-evidence", "conversation-evidence", "completed", "Inspect",
-            stamp, stamp, stamp, stamp, None, None, None, None, None, None, None, "normal",
+            "run-evidence",
+            "conversation-evidence",
+            "completed",
+            "Inspect",
+            stamp,
+            stamp,
+            stamp,
+            stamp,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "normal",
         ),
     )
     store = EvidenceStore(database)
-    target = await store.record("run-evidence", "tool_result", {
-        "tool_call_id": "call-1", "task_id": "task-1", "task_step": 2,
-        "output": "needle " + "x" * 30_000,
-    })
+    target = await store.record(
+        "run-evidence",
+        "tool_result",
+        {
+            "tool_call_id": "call-1",
+            "task_id": "task-1",
+            "task_step": 2,
+            "output": "needle " + "x" * 30_000,
+        },
+    )
     for index in range(3):
         await store.record("run-evidence", "tool_result", {"output": f"unrelated-{index}"})
     found = await store.search("needle", limit=1)

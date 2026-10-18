@@ -17,18 +17,32 @@ const scopeLabels: Record<PermissionScope, string> = {
   global: '始终允许',
 }
 
-export function approvalTitle(approval: Pick<Approval, 'tool_name'|'arguments'>): string {
+export function approvalTitle(approval: Pick<Approval, 'tool_name' | 'arguments'>): string {
   const base = toolLabels[approval.tool_name] || approval.tool_name.replaceAll('_', ' ')
-  const target = approval.arguments.path || approval.arguments.app || approval.arguments.host || approval.arguments.url_origin
+  const target =
+    approval.arguments.path ||
+    approval.arguments.app ||
+    approval.arguments.host ||
+    approval.arguments.url_origin
   return target ? `${base}：${String(target)}` : base
 }
 
 export function approvalFacts(argumentsValue: Record<string, unknown>): Array<[string, string]> {
-  const friendly: Record<string, string> = { path:'路径', app:'应用', host:'主机', method:'方式', text:'输入内容', key:'按键', url:'网址', url_origin:'来源', server_name:'服务' }
+  const friendly: Record<string, string> = {
+    path: '路径',
+    app: '应用',
+    host: '主机',
+    method: '方式',
+    text: '输入内容',
+    key: '按键',
+    url: '网址',
+    url_origin: '来源',
+    server_name: '服务',
+  }
   return Object.entries(argumentsValue)
-    .filter(([,value]) => ['string','number','boolean'].includes(typeof value))
+    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
     .slice(0, 8)
-    .map(([key,value]) => [friendly[key] || key, key === 'text' ? redactText(String(value)) : String(value)])
+    .map(([key, value]) => [friendly[key] || key, key === 'text' ? redactText(String(value)) : String(value)])
 }
 
 export function permissionScopeLabel(scope: PermissionScope): string {

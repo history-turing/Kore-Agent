@@ -40,8 +40,9 @@ class RunPostProcessor:
         if config is None:
             return (previous or "") + "\n" + source[-12_000:]
         prompt = (
-            "Create a compact factual rolling summary for continuing this conversation. Preserve user goals, constraints, "
-            "decisions, unresolved issues, file paths, tool outcomes and next steps. Do not add facts.\n\n"
+            "Create a compact factual rolling summary for continuing this conversation. "
+            "Preserve user goals, constraints, decisions, unresolved issues, file paths, "
+            "tool outcomes and next steps. Do not add facts.\n\n"
             f"PREVIOUS SUMMARY:\n{previous or '(none)'}\n\nNEW HISTORY:\n{source}"
         )
         reply = await ModelClient(self._settings(), config).complete([{"role": "user", "content": prompt}], [], [])
@@ -49,7 +50,9 @@ class RunPostProcessor:
             await self.record_auxiliary_usage(run, "context_summary", reply.usage, config)
         return reply.content or source[-12_000:]
 
-    async def record_auxiliary_usage(self, run: dict[str, Any], role: str, usage: dict[str, int], config: dict[str, Any]) -> None:
+    async def record_auxiliary_usage(
+        self, run: dict[str, Any], role: str, usage: dict[str, int], config: dict[str, Any]
+    ) -> None:
         settings = self._settings()
         await self.runs.event(
             run,
@@ -89,7 +92,9 @@ class RunPostProcessor:
 
             async def maintenance_model(prompt: str) -> str:
                 assert maintenance_config is not None
-                reply = await ModelClient(settings, maintenance_config).complete([{"role": "user", "content": prompt}], [], [])
+                reply = await ModelClient(settings, maintenance_config).complete(
+                    [{"role": "user", "content": prompt}], [], []
+                )
                 await self.record_auxiliary_usage(run, "memory_maintenance", reply.usage, maintenance_config)
                 return reply.content or "{}"
 
@@ -99,7 +104,9 @@ class RunPostProcessor:
             async def distill_model(prompt: str) -> str:
                 if distill_config is None:
                     return "{}"
-                reply = await ModelClient(settings, distill_config).complete([{"role": "user", "content": prompt}], [], [])
+                reply = await ModelClient(settings, distill_config).complete(
+                    [{"role": "user", "content": prompt}], [], []
+                )
                 await self.record_auxiliary_usage(run, "skill_learning", reply.usage, distill_config)
                 return reply.content or "{}"
 

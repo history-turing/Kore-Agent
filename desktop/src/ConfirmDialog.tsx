@@ -27,15 +27,19 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => current.previousFocus?.focus(), 0)
   }, [])
 
-  const confirm = useCallback((request: Confirmation) => new Promise<boolean>(resolve => {
-    if (pendingRef.current) {
-      resolve(false)
-      return
-    }
-    const next = { ...request, resolve, previousFocus: document.activeElement as HTMLElement | null }
-    pendingRef.current = next
-    setPending(next)
-  }), [])
+  const confirm = useCallback(
+    (request: Confirmation) =>
+      new Promise<boolean>((resolve) => {
+        if (pendingRef.current) {
+          resolve(false)
+          return
+        }
+        const next = { ...request, resolve, previousFocus: document.activeElement as HTMLElement | null }
+        pendingRef.current = next
+        setPending(next)
+      }),
+    [],
+  )
 
   useEffect(() => {
     if (!pending) return
@@ -60,17 +64,40 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', key)
   }, [pending, settle])
 
-  return <ConfirmContext.Provider value={confirm}>
-    {children}
-    {pending && <div className="modal-back" onMouseDown={event => { if (event.target === event.currentTarget) settle(false) }}>
-      <section ref={dialog} className="modal confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
-        <h2 id="confirm-title">{pending.title}</h2>
-        <p id="confirm-message">{pending.message}</p>
-        <div className="modal-actions">
-          <button ref={cancelButton} onClick={() => settle(false)}>返回</button>
-          <button className={pending.destructive ? 'confirm-danger' : 'primary'} onClick={() => settle(true)}>{pending.confirmLabel}</button>
+  return (
+    <ConfirmContext.Provider value={confirm}>
+      {children}
+      {pending && (
+        <div
+          className="modal-back"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) settle(false)
+          }}
+        >
+          <section
+            ref={dialog}
+            className="modal confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-title"
+            aria-describedby="confirm-message"
+          >
+            <h2 id="confirm-title">{pending.title}</h2>
+            <p id="confirm-message">{pending.message}</p>
+            <div className="modal-actions">
+              <button ref={cancelButton} onClick={() => settle(false)}>
+                返回
+              </button>
+              <button
+                className={pending.destructive ? 'confirm-danger' : 'primary'}
+                onClick={() => settle(true)}
+              >
+                {pending.confirmLabel}
+              </button>
+            </div>
+          </section>
         </div>
-      </section>
-    </div>}
-  </ConfirmContext.Provider>
+      )}
+    </ConfirmContext.Provider>
+  )
 }

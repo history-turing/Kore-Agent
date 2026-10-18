@@ -140,7 +140,7 @@ class Application:
             track_background=self._track_background,
             running=self.running,
             triggering=self.triggering_automations,
-            schedule_next=lambda schedule, base: self._next_schedule(schedule, base),
+            schedule_next=AutomationService.compute_next_schedule,
         )
         self.tool_router = ServiceToolRouter(
             self.db,
@@ -149,7 +149,7 @@ class Application:
             self.memory_service,
             self.task_service,
             self.evidence,
-            self.extensions,
+            self.skill_service,
             self.automations,
             self.artifacts,
         )
@@ -159,7 +159,7 @@ class Application:
             runs=self.runs,
             memory=self.memory_service,
             tasks=self.task_service,
-            skills=self.extensions.skills,
+            skills=self.skill_service.skills,
             skill_learning=self.skill_learning,
         )
         self.run_engine = RunEngine(
@@ -172,7 +172,7 @@ class Application:
             memory=self.memory_service,
             tasks=self.task_service,
             evidence=self.evidence,
-            skills=self.extensions.skills,
+            skills=self.skill_service.skills,
             post_processor=self.run_post_processor,
             run_budget=self.run_budget,
             computer_guard=self.computer_guard,
@@ -182,7 +182,7 @@ class Application:
             artifacts=self.artifacts,
             tool_router=self.tool_router,
             broadcast=lambda: self.broadcast,
-            post_run=lambda run, result: self._post_run(run, result),
+            post_run=lambda run, result: self.run_post_processor.run(run, result),
             track_background=self._track_background,
         )
 
@@ -191,9 +191,9 @@ class Application:
 
     async def start(self) -> None:
         await self.db.initialize()
-        await self.extensions.migrate_user_skills()
-        await self.skill_learning.scan_completed_runs(existing_skills=await self.extensions.skills(), limit=100)
-        mcp = await self.extensions.mcp()
+        await self.skill_service.migrate_user_skills()
+        await self.skill_learning.scan_completed_runs(existing_skills=await self.skill_service.skills(), limit=100)
+        mcp = await self.mcp_settings.mcp()
         await self.mcp_manager.start(mcp["servers"])
         await self.computer.start()
         await self.automations.restore()
@@ -298,7 +298,7 @@ class Application:
         await self.mcp_manager.close()
         await self.computer.close()
         self.mcp_manager = McpManager(self.settings.workspace_dir)
-        mcp = await self.extensions.mcp()
+        mcp = await self.mcp_settings.mcp()
         await self.mcp_manager.start(mcp["servers"])
         self.computer = ComputerClient(self.settings, self._store_observation)
         await self.computer.start()
@@ -410,12 +410,6 @@ class Application:
     async def artifact_path(self, aid: str) -> Path | None:
         return await self.artifacts.path(aid)
 
-    async def publish_artifact(self, *, path: Path, title: str, description: str | None, run_id: str) -> dict[str, Any]:
-        return await self.artifacts.publish(path=path, title=title, description=description, run_id=run_id)
-
-    async def publish_url_artifact(self, *, url: str, title: str, description: str | None, run_id: str) -> dict[str, Any]:
-        return await self.artifacts.publish_url(url=url, title=title, description=description, run_id=run_id)
-
     async def task_list(self, params: dict[str, Any]) -> dict[str, Any]:
         tasks = await self.task_service.list(
             limit=max(1, min(int(params.get("limit", 100)), 500)),
@@ -447,9 +441,6 @@ class Application:
     async def memory_list(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.memory_service.list()
 
-    async def remember(self, *, title: str, summary: str, content: str) -> dict[str, Any]:
-        return await self.memory_service.create(title=title, summary=summary, content=content)
-
     async def computer_status(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self.computer.status()
 
@@ -462,7 +453,9 @@ class Application:
             raise RpcFault(-32001, str(exc)) from exc
 
     async def computer_latest_observation(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.db.get_json("computer_latest_observation", {"run_id": None, "event_time": None, "observation": None})
+        return await self.db.get_json(
+            "computer_latest_observation", {"run_id": None, "event_time": None, "observation": None}
+        )
 
     async def _store_observation(self, observation: dict[str, Any]) -> None:
         await self.db.set_json("computer_latest_observation", observation)
@@ -477,22 +470,22 @@ class Application:
         return await self.extensions.import_apply(params)
 
     async def skill_install(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.extensions.skill_install(params)
+        return await self.skill_service.skill_install(params)
 
     async def skill_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.extensions.skill_set_enabled(params)
+        return await self.skill_service.skill_set_enabled(params)
 
     async def skill_delete(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.extensions.skill_delete(params)
+        return await self.skill_service.skill_delete(params)
 
     async def mcp_add(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.extensions.mcp_add(params)
+        return await self.mcp_settings.mcp_add(params)
 
     async def mcp_set_enabled(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.extensions.mcp_set_enabled(params)
+        return await self.mcp_settings.mcp_set_enabled(params)
 
     async def mcp_delete(self, params: dict[str, Any]) -> dict[str, Any]:
-        return await self.extensions.mcp_delete(params)
+        return await self.mcp_settings.mcp_delete(params)
 
     async def tool_call(self, name: str, arguments: dict[str, Any], *, run_id: str, mode: str) -> Any:
         return await self.tool_router.tool_call(name, arguments, run_id=run_id, mode=mode)
@@ -503,66 +496,3 @@ class Application:
 
     async def _execute_run(self, run: dict[str, Any], recovery_state: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self.run_engine.execute(run, recovery_state)
-
-    async def _post_run(self, run: dict[str, Any], result: dict[str, Any]) -> None:
-        await self.run_engine.run_post_processing(run, result)
-
-    async def _add_message(self, cid: str, message: dict[str, Any]) -> None:
-        await self.conversations.add_message(cid, message)
-
-    async def _new_run(self, cid: str | None, text: str, mode: str, **extra: Any) -> dict[str, Any]:
-        return await self.runs.create(cid, text, mode, **extra)
-
-    async def _save_run(self, run: dict[str, Any]) -> None:
-        await self.runs.save(run)
-
-    async def _event(self, run: dict[str, Any], kind: str, **data: Any) -> dict[str, Any]:
-        return await self.runs.event(run, kind, **data)
-
-    async def _request_approval(self, run_id: str, call_id: str, arguments: dict[str, Any], reason: str) -> bool:
-        return await self.approvals.request(run_id, call_id, arguments, reason)
-
-    async def _cancel_approval(self, approval_id: str) -> None:
-        await self.approvals.cancel(approval_id)
-
-    async def _resolve_approval(self, aid: str, decision: bool, *, scope: str = "once") -> dict[str, Any]:
-        return await self.approvals.resolve(aid, decision, scope=scope)
-
-    async def _skills(self) -> list[dict[str, Any]]:
-        return await self.extensions.skills()
-
-    async def _migrate_user_skills(self) -> None:
-        await self.extensions.migrate_user_skills()
-
-    @staticmethod
-    def _skill_catalog(skills: list[dict[str, Any]]) -> str:
-        return RunEngine.skill_catalog(skills)
-
-    @staticmethod
-    def _system_prompt(mode: str) -> str:
-        return RunEngine.system_prompt(mode)
-
-    @staticmethod
-    def _history_for_model(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return RunEngine.history_for_model(history)
-
-    async def _summarize_context(self, source: str, previous: str | None, *, run: dict[str, Any] | None = None) -> str:
-        return await self.run_engine.summarize_context(source, previous, run=run)
-
-    async def _role_model_config(self, role: str) -> dict[str, Any] | None:
-        return await self.model_settings.role_config(role)
-
-    async def _record_auxiliary_usage(self, run: dict[str, Any], role: str, usage: dict[str, int], config: dict[str, Any]) -> None:
-        await self.run_engine.record_auxiliary_usage(run, role, usage, config)
-
-    async def _create_plan_task(self, run: dict[str, Any], content: str) -> dict[str, Any]:
-        return await self.run_engine.create_plan_task(run, content)
-
-    async def _claim_automation_occurrence(self, automation_id: str) -> dict[str, Any] | None:
-        return await self.automations.claim_occurrence(automation_id)
-
-    async def _restore_automation_runs(self) -> None:
-        await self.automations.restore()
-
-    def _next_schedule(self, schedule: dict[str, Any], base: str) -> str | None:
-        return self.automations.compute_next_schedule(schedule, base)

@@ -325,9 +325,7 @@ def prepare_instance(
     reuse: bool = False,
 ) -> None:
     can_reuse = (
-        reuse
-        and (workspace / ".git" / "HEAD").is_file()
-        and any(item.name != ".git" for item in workspace.iterdir())
+        reuse and (workspace / ".git" / "HEAD").is_file() and any(item.name != ".git" for item in workspace.iterdir())
     )
     if reuse and workspace.exists() and not can_reuse:
         raise DriverError(f"Cannot reuse an incomplete workspace: {workspace}")
@@ -505,7 +503,9 @@ def run_instance(
     instance_id = str(row["instance_id"])
     image = image_for(row, args.image_template)
     container = _container_name(instance_id)
-    workspace = Path(args.workspace_dir).expanduser().resolve() if args.workspace_dir else run_dir / "workspaces" / instance_id
+    workspace = (
+        Path(args.workspace_dir).expanduser().resolve() if args.workspace_dir else run_dir / "workspaces" / instance_id
+    )
     state_dir = run_dir / "state" / instance_id
     events_path = run_dir / "logs" / f"{instance_id}.events.jsonl"
     patch_path = run_dir / "patches" / f"{instance_id}.patch"

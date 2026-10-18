@@ -135,7 +135,9 @@ class RunEngine:
                     memory_index=await self.memory.index(),
                     task_context=await self.tasks.active_context(run["conversation_id"]),
                     skill_catalog=self.skill_catalog(await self.skills()),
-                    summarizer=lambda source, previous: self.post_processor.summarize_context(source, previous, run=run),
+                    summarizer=lambda source, previous: self.post_processor.summarize_context(
+                        source, previous, run=run
+                    ),
                 )
                 context_decision = decision
                 model_messages = decision.messages
@@ -206,25 +208,42 @@ class RunEngine:
                     base_tools = []
                     extra_tools = []
                 estimator = self.context.estimator
-                tool_schema_tokens = estimator.count_text(dumps([*base_tools, *extra_tools])) if base_tools or extra_tools else 0
+                tool_schema_tokens = (
+                    estimator.count_text(dumps([*base_tools, *extra_tools])) if base_tools or extra_tools else 0
+                )
                 final_instruction = {
                     "role": "system",
                     "content": (
-                        "The run budget is closing. Return the best truthful final answer now. Do not call tools. State incomplete work explicitly."
+                        "The run budget is closing. Return the best truthful final answer now. "
+                        "Do not call tools. State incomplete work explicitly."
                     ),
                 }
                 step_context = await self.context.prepare_step(
                     messages=model_messages,
                     provider=str(model_config.get("provider") or settings.provider),
                     model=str(model_config.get("model") or settings.model),
-                    tool_schema_tokens=tool_schema_tokens + (estimator.count_message(final_instruction) if force_final else 0),
-                    summarizer=lambda source, previous: self.post_processor.summarize_context(source, previous, run=run),
+                    tool_schema_tokens=tool_schema_tokens
+                    + (estimator.count_message(final_instruction) if force_final else 0),
+                    summarizer=lambda source, previous: self.post_processor.summarize_context(
+                        source, previous, run=run
+                    ),
                 )
                 model_messages = step_context.messages
                 request_messages = [*model_messages, final_instruction] if force_final else model_messages
-                system_tokens = sum(estimator.count_message(item) for item in request_messages if item.get("role") == "system")
-                tool_tokens = sum(estimator.count_message(item) for item in request_messages if item.get("role") == "tool")
-                history_tokens = sum(estimator.count_message(item) for item in request_messages if item.get("role") not in {"system", "tool"}) + 8
+                system_tokens = sum(
+                    estimator.count_message(item) for item in request_messages if item.get("role") == "system"
+                )
+                tool_tokens = sum(
+                    estimator.count_message(item) for item in request_messages if item.get("role") == "tool"
+                )
+                history_tokens = (
+                    sum(
+                        estimator.count_message(item)
+                        for item in request_messages
+                        if item.get("role") not in {"system", "tool"}
+                    )
+                    + 8
+                )
                 metrics = StepMetrics(
                     prepared_tokens=system_tokens + tool_tokens + history_tokens + tool_schema_tokens,
                     system_tokens=system_tokens,
@@ -542,12 +561,17 @@ class RunEngine:
                     "tool_schemas": metrics.tool_schema_tokens,
                 },
                 "tool_result_tokens_before": (
-                    step_context.original_tool_result_tokens if step_context.original_tool_result_tokens is not None else metrics.tool_tokens
+                    step_context.original_tool_result_tokens
+                    if step_context.original_tool_result_tokens is not None
+                    else metrics.tool_tokens
                 ),
                 "tool_result_tokens_after": (
-                    step_context.prepared_tool_result_tokens if step_context.prepared_tool_result_tokens is not None else metrics.tool_tokens
+                    step_context.prepared_tool_result_tokens
+                    if step_context.prepared_tool_result_tokens is not None
+                    else metrics.tool_tokens
                 ),
-                "compacted": bool(step_context.compacted) or bool(step == start_step and context_decision and context_decision.compacted),
+                "compacted": bool(step_context.compacted)
+                or bool(step == start_step and context_decision and context_decision.compacted),
                 "compaction_stage": step_context.compaction_stage
                 if step_context.compacted
                 else (context_decision.compaction_stage if step == start_step and context_decision else "none"),
@@ -664,14 +688,16 @@ class RunEngine:
     @staticmethod
     def system_prompt(mode: str) -> str:
         common = (
-            "You are KoreAgent Next, a reliable local AI agent. Work toward the user's actual result, use tools when useful, "
-            "keep durable task state current, publish deliverables, and never claim an action succeeded without evidence. "
+            "You are KoreAgent Next, a reliable local AI agent. Work toward the user's actual result, "
+            "use tools when useful, keep durable task state current, publish deliverables, and never "
+            "claim an action succeeded without evidence. "
             "Use tool_catalog to discover and activate optional capabilities before calling them."
         )
         if mode == "plan":
             return common + (
                 " You are in PLAN MODE. Inspect and research only. Do not perform side effects. "
-                "Create exactly one pending Task with task_create, including concrete ordered steps, constraints, and success criteria."
+                "Create exactly one pending Task with task_create, including concrete ordered steps, "
+                "constraints, and success criteria."
             )
         return common
 
@@ -681,17 +707,8 @@ class RunEngine:
         for skill in sorted(skills, key=lambda item: item.get("scope") != "project"):
             if skill.get("enabled"):
                 selected.setdefault(skill["name"], skill)
-        lines = [f"- {skill['name']} ({skill.get('scope', 'project')}): {skill.get('description', '')}" for skill in selected.values()]
+        lines = [
+            f"- {skill['name']} ({skill.get('scope', 'project')}): {skill.get('description', '')}"
+            for skill in selected.values()
+        ]
         return "\n".join(lines)[:6_000]
-
-    async def summarize_context(self, source: str, previous: str | None, *, run: dict[str, Any] | None = None) -> str:
-        return await self.post_processor.summarize_context(source, previous, run=run)
-
-    async def record_auxiliary_usage(self, run: dict[str, Any], role: str, usage: dict[str, int], config: dict[str, Any]) -> None:
-        await self.post_processor.record_auxiliary_usage(run, role, usage, config)
-
-    async def run_post_processing(self, run: dict[str, Any], result: dict[str, Any]) -> None:
-        await self.post_processor.run(run, result)
-
-    async def create_plan_task(self, run: dict[str, Any], content: str) -> dict[str, Any]:
-        return await self.post_processor.create_plan_task(run, content)

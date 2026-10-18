@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from kore_next.agent import ToolExecutor, builtin_tool_definitions, shell_command_argv
 from kore_next.bench.swebench_driver import build_prompt, image_for, load_instances, parse_args, select_pending
 from kore_next.config import Settings
+from kore_next.tools import ToolExecutor, builtin_tool_definitions, shell_command_argv
 
 
 def test_build_prompt_contains_issue_and_guardrails():

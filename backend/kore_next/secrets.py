@@ -74,7 +74,11 @@ class SecretStore:
                 value = json.loads(self.path.read_text(encoding="utf-8")).get(provider)
             except (OSError, json.JSONDecodeError):
                 return "none"
-            return "dpapi" if isinstance(value, dict) and value.get("encoding") == "dpapi" else ("legacy_plaintext" if value else "none")
+            return (
+                "dpapi"
+                if isinstance(value, dict) and value.get("encoding") == "dpapi"
+                else ("legacy_plaintext" if value else "none")
+            )
         return "none"
 
     def set(self, provider: str, secret: str) -> None:
@@ -93,7 +97,9 @@ class SecretStore:
         if sys.platform == "win32":
             data[provider] = {"encoding": "dpapi", "value": self._dpapi_protect(secret)}
         else:
-            raise RuntimeError("Persistent model API keys require macOS Keychain or Windows DPAPI; use an environment variable")
+            raise RuntimeError(
+                "Persistent model API keys require macOS Keychain or Windows DPAPI; use an environment variable"
+            )
         self.path.write_text(json.dumps(data), encoding="utf-8")
         try:
             self.path.chmod(0o600)

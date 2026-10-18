@@ -62,7 +62,11 @@ class ToolExecutor:
 
     def tool_definitions(self, mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         available = builtin_tool_definitions(mode, web_tools=self.settings.web_tools_enabled)
-        base = [definition for definition in available if definition["function"]["name"] in CORE_TOOLS | self.activated_tools]
+        base = [
+            definition
+            for definition in available
+            if definition["function"]["name"] in CORE_TOOLS | self.activated_tools
+        ]
         extra = []
         if mode != "plan":
             extra = [
@@ -306,7 +310,14 @@ class ToolExecutor:
                     url = _search_result_url(str(item.get("url") or ""))
                     if not title or not url:
                         continue
-                    results.append({"title": title, "url": url, "snippet": str(item.get("content") or ""), "score": item.get("score")})
+                    results.append(
+                        {
+                            "title": title,
+                            "url": url,
+                            "snippet": str(item.get("content") or ""),
+                            "score": item.get("score"),
+                        }
+                    )
                     if len(results) >= limit:
                         break
                 return json.dumps({"query": query, "provider": "tavily", "results": results}, ensure_ascii=False)
@@ -327,7 +338,9 @@ class ToolExecutor:
         results = []
         for index, (url, title) in enumerate(links):
             clean_title = html.unescape(re.sub(r"<[^>]+>", "", title)).strip()
-            clean_snippet = html.unescape(re.sub(r"<[^>]+>", "", snippets[index] if index < len(snippets) else "")).strip()
+            clean_snippet = html.unescape(
+                re.sub(r"<[^>]+>", "", snippets[index] if index < len(snippets) else "")
+            ).strip()
             clean_url = _search_result_url(html.unescape(url))
             if not clean_title or not clean_url:
                 continue
@@ -350,15 +363,25 @@ class ToolExecutor:
                 await self._validate_public_url(destination)
                 origin, target = urlsplit(url), urlsplit(destination)
                 if (origin.scheme, origin.hostname, origin.port) != (target.scheme, target.hostname, target.port):
-                    headers = {key: value for key, value in headers.items() if key.lower() not in {"authorization", "cookie", "proxy-authorization"}}
-                if response.status_code == 303 or (response.status_code in {301, 302} and method not in {"GET", "HEAD"}):
+                    headers = {
+                        key: value
+                        for key, value in headers.items()
+                        if key.lower() not in {"authorization", "cookie", "proxy-authorization"}
+                    }
+                if response.status_code == 303 or (
+                    response.status_code in {301, 302} and method not in {"GET", "HEAD"}
+                ):
                     method = "GET"
                     body = None
                 url = destination
             else:
                 raise ValueError("Too many HTTP redirects")
         content_type = response.headers.get("content-type", "")
-        body = response.text[:50_000] if "text" in content_type or "json" in content_type else f"<{len(response.content)} binary bytes>"
+        body = (
+            response.text[:50_000]
+            if "text" in content_type or "json" in content_type
+            else f"<{len(response.content)} binary bytes>"
+        )
         return json.dumps(
             {"status": response.status_code, "headers": dict(response.headers), "body": body},
             ensure_ascii=False,
@@ -374,7 +397,9 @@ class ToolExecutor:
         if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
             raise PermissionError("Local network URLs are not allowed")
         try:
-            addresses = await asyncio.to_thread(socket.getaddrinfo, host, parsed.port or (443 if parsed.scheme == "https" else 80))
+            addresses = await asyncio.to_thread(
+                socket.getaddrinfo, host, parsed.port or (443 if parsed.scheme == "https" else 80)
+            )
         except OSError as exc:
             raise ValueError(f"Cannot resolve host: {host}") from exc
         for address in addresses:

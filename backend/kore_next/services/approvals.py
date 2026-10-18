@@ -71,7 +71,9 @@ class ApprovalService:
             "created_at": stamp,
             "resolved_at": None,
             "matched_rule_id": None,
-            "available_scopes": ["once", "run", "conversation", "global"] if self.permission_rules.signing_key else ["once"],
+            "available_scopes": ["once", "run", "conversation", "global"]
+            if self.permission_rules.signing_key
+            else ["once"],
         }
         await self.db.execute("INSERT INTO approvals VALUES(?,?,?,?)", (aid, dumps(approval), "pending", stamp))
         future = asyncio.get_running_loop().create_future()
@@ -125,7 +127,9 @@ class ApprovalService:
         return {"approvals": [loads(r["data_json"], {}) for r in rows]}
 
     async def get(self, params: dict[str, Any]) -> dict[str, Any]:
-        row = await self.db.fetchone("SELECT data_json FROM approvals WHERE id=?", (str(required(params, "approval_id")),))
+        row = await self.db.fetchone(
+            "SELECT data_json FROM approvals WHERE id=?", (str(required(params, "approval_id")),)
+        )
         if not row:
             raise RpcFault(-32000, "Approval not found")
         return {"approval": loads(row["data_json"], {})}

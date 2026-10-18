@@ -107,7 +107,8 @@ class ConversationService:
 
     async def add_message(self, cid: str, message: dict[str, Any]) -> None:
         await self.db.execute(
-            "INSERT INTO messages(conversation_id,role,content,name,tool_call_id,tool_calls_json,reasoning,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO messages(conversation_id,role,content,name,tool_call_id,"
+            "tool_calls_json,reasoning,created_at) VALUES(?,?,?,?,?,?,?,?)",
             (
                 cid,
                 message["role"],

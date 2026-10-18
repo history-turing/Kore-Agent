@@ -133,7 +133,8 @@ class SkillService:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "SKILL.md"
         path.write_text(
-            f"---\nname: {name}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n{required(params, 'instructions')}\n",
+            f"---\nname: {name}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n"
+            f"{required(params, 'instructions')}\n",
             encoding="utf-8",
         )
         skills = [s for s in await self.skills() if not (s["name"] == name and s["scope"] == scope)]

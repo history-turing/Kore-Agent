@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 
-def _definition(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+def _definition(
+    name: str, description: str, properties: dict[str, Any], required: list[str] | None = None
+) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
@@ -108,10 +110,17 @@ TOOLS.extend(
         _definition(
             "artifact_publish",
             "Publish exactly one workspace file or public http(s) URL as a deliverable.",
-            {"path": {"type": "string"}, "url": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}},
+            {
+                "path": {"type": "string"},
+                "url": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+            },
             ["title"],
         ),
-        _definition("get_current_time", "Return the current time in an IANA timezone.", {"timezone": {"type": "string"}}),
+        _definition(
+            "get_current_time", "Return the current time in an IANA timezone.", {"timezone": {"type": "string"}}
+        ),
         _definition(
             "web_search",
             "Search the web and return titles, URLs and snippets.",
@@ -121,13 +130,25 @@ TOOLS.extend(
         _definition(
             "http_request",
             "Perform an HTTP request to a public URL.",
-            {"url": {"type": "string"}, "method": {"type": "string"}, "headers": {"type": "object"}, "body": {"type": "string"}},
+            {
+                "url": {"type": "string"},
+                "method": {"type": "string"},
+                "headers": {"type": "object"},
+                "body": {"type": "string"},
+            },
             ["url"],
         ),
         _definition(
-            "history_search", "Search prior messages in this conversation.", {"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]
+            "history_search",
+            "Search prior messages in this conversation.",
+            {"query": {"type": "string"}, "limit": {"type": "integer"}},
+            ["query"],
         ),
-        _definition("history_read", "Read a range of prior conversation messages.", {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
+        _definition(
+            "history_read",
+            "Read a range of prior conversation messages.",
+            {"offset": {"type": "integer"}, "limit": {"type": "integer"}},
+        ),
         _definition(
             "session_search",
             "Search messages across past conversations on this device.",
@@ -135,7 +156,9 @@ TOOLS.extend(
             ["query"],
         ),
         _definition("memory_list", "List the long-term memory index.", {"status": {"type": "string"}}),
-        _definition("memory_read", "Read one long-term memory record.", {"memory_id": {"type": "string"}}, ["memory_id"]),
+        _definition(
+            "memory_read", "Read one long-term memory record.", {"memory_id": {"type": "string"}}, ["memory_id"]
+        ),
         _definition(
             "memory_create",
             "Create a durable long-term memory.",
@@ -145,12 +168,25 @@ TOOLS.extend(
         _definition(
             "memory_update",
             "Update a long-term memory.",
-            {"memory_id": {"type": "string"}, "title": {"type": "string"}, "summary": {"type": "string"}, "content": {"type": "string"}},
+            {
+                "memory_id": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "content": {"type": "string"},
+            },
             ["memory_id"],
         ),
-        _definition("memory_archive", "Archive a long-term memory.", {"memory_id": {"type": "string"}, "reason": {"type": "string"}}, ["memory_id"]),
         _definition(
-            "core_memory_update", "Set one stable core-memory entry.", {"key": {"type": "string"}, "value": {"type": "string"}}, ["key", "value"]
+            "memory_archive",
+            "Archive a long-term memory.",
+            {"memory_id": {"type": "string"}, "reason": {"type": "string"}},
+            ["memory_id"],
+        ),
+        _definition(
+            "core_memory_update",
+            "Set one stable core-memory entry.",
+            {"key": {"type": "string"}, "value": {"type": "string"}},
+            ["key", "value"],
         ),
         _definition("core_memory_remove", "Remove one core-memory entry.", {"key": {"type": "string"}}, ["key"]),
         _definition(
@@ -180,7 +216,10 @@ TOOLS.extend(
         _definition("task_get", "Read a tracked task.", {"task_id": {"type": "string"}}, ["task_id"]),
         _definition("task_list", "List tracked tasks.", {"status": {"type": "string"}, "limit": {"type": "integer"}}),
         _definition(
-            "skill_read", "Read the instructions for an available skill.", {"name": {"type": "string"}, "scope": {"type": "string"}}, ["name"]
+            "skill_read",
+            "Read the instructions for an available skill.",
+            {"name": {"type": "string"}, "scope": {"type": "string"}},
+            ["name"],
         ),
         _definition(
             "skill_resource_read",
@@ -191,7 +230,12 @@ TOOLS.extend(
         _definition(
             "evidence_search",
             "Search durable run evidence.",
-            {"query": {"type": "string"}, "run_id": {"type": "string"}, "kind": {"type": "string"}, "limit": {"type": "integer"}},
+            {
+                "query": {"type": "string"},
+                "run_id": {"type": "string"},
+                "kind": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
             ["query"],
         ),
         _definition("evidence_read", "Read one evidence record.", {"evidence_id": {"type": "string"}}, ["evidence_id"]),
@@ -211,9 +255,15 @@ TOOLS.extend(
         ),
         _definition("automation_list", "List automations.", {}),
         _definition("automation_get", "Read an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]),
-        _definition("automation_pause", "Pause an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]),
-        _definition("automation_resume", "Resume an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]),
-        _definition("automation_cancel", "Cancel an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]),
+        _definition(
+            "automation_pause", "Pause an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]
+        ),
+        _definition(
+            "automation_resume", "Resume an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]
+        ),
+        _definition(
+            "automation_cancel", "Cancel an automation.", {"automation_id": {"type": "string"}}, ["automation_id"]
+        ),
     ]
 )
 
@@ -253,7 +303,12 @@ CORE_TOOLS = {
 TOOL_CATALOG_DEFINITION = _definition(
     "tool_catalog",
     "Find and activate additional tools for this run by capability or name.",
-    {"query": {"type": "string", "description": "Capability to find, for example memory, session search, HTTP, evidence, automation, MCP."}},
+    {
+        "query": {
+            "type": "string",
+            "description": "Capability to find, for example memory, session search, HTTP, evidence, automation, MCP.",
+        }
+    },
     ["query"],
 )
 TOOLS.append(TOOL_CATALOG_DEFINITION)

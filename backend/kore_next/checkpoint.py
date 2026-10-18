@@ -25,7 +25,13 @@ class CheckpointStore:
             "sequence=excluded.sequence,data_json=excluded.data_json,updated_at=excluded.updated_at",
             (run_id, conversation_id, sequence, dumps(state), stamp, stamp),
         )
-        return {"run_id": run_id, "conversation_id": conversation_id, "sequence": sequence, "state": state, "updated_at": stamp}
+        return {
+            "run_id": run_id,
+            "conversation_id": conversation_id,
+            "sequence": sequence,
+            "state": state,
+            "updated_at": stamp,
+        }
 
     async def get(self, run_id: str) -> dict[str, Any] | None:
         row = await self.db.fetchone("SELECT * FROM checkpoints WHERE run_id=?", (run_id,))

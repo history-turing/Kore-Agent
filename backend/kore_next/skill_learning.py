@@ -60,8 +60,7 @@ class SkillLearningService:
 
         tool_names = [str(call.get("name") or "unknown") for call in useful]
         signature_source = "\n".join(
-            f"{call.get('name')}:{','.join(sorted((call.get('arguments') or {}).keys()))}"
-            for call in useful
+            f"{call.get('name')}:{','.join(sorted((call.get('arguments') or {}).keys()))}" for call in useful
         )
         signature = hashlib.sha256(signature_source.encode()).hexdigest()
         similar = await self._similar_candidate(tool_names)
@@ -104,7 +103,8 @@ class SkillLearningService:
                 candidate.update(distilled)
         await self.db.execute(
             "INSERT INTO skill_candidates(id,status,data_json,created_at,updated_at) VALUES(?,?,?,?,?) "
-            "ON CONFLICT(id) DO UPDATE SET status=excluded.status,data_json=excluded.data_json,updated_at=excluded.updated_at",
+            "ON CONFLICT(id) DO UPDATE SET status=excluded.status,"
+            "data_json=excluded.data_json,updated_at=excluded.updated_at",
             (signature, status, dumps(candidate), candidate["created_at"], stamp),
         )
         await self.db.set_json(processed_key, True)
@@ -155,10 +155,14 @@ class SkillLearningService:
 
     @staticmethod
     def _overlap_action(candidate: dict[str, Any], existing_skills: list[dict[str, Any]]) -> dict[str, Any]:
-        candidate_terms = set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", f"{candidate.get('title')} {candidate.get('description')}".lower()))
+        candidate_terms = set(
+            re.findall(r"[a-z0-9\u4e00-\u9fff]+", f"{candidate.get('title')} {candidate.get('description')}".lower())
+        )
         best: tuple[float, str] | None = None
         for skill in existing_skills:
-            terms = set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", f"{skill.get('name')} {skill.get('description')}".lower()))
+            terms = set(
+                re.findall(r"[a-z0-9\u4e00-\u9fff]+", f"{skill.get('name')} {skill.get('description')}".lower())
+            )
             score = len(candidate_terms & terms) / max(1, len(candidate_terms | terms))
             if best is None or score > best[0]:
                 best = (score, str(skill.get("name") or ""))

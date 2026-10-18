@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol
 
 from ..checkpoint import CheckpointStore
 from ..config import Settings
@@ -14,6 +14,34 @@ from ..util import dumps, loads, now, uid
 
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 ExecuteRun = Callable[[dict[str, Any], dict[str, Any] | None], Awaitable[dict[str, Any]]]
+
+RUN_FIELDS = (
+    "id",
+    "conversation_id",
+    "status",
+    "user_message",
+    "created_at",
+    "started_at",
+    "updated_at",
+    "completed_at",
+    "error",
+    "stop_reason",
+    "recovered_from_run_id",
+    "source",
+    "source_id",
+    "scheduled_for",
+    "triggered_at",
+    "mode",
+)
+
+
+class SqlExecutor(Protocol):
+    async def execute(self, sql: str, parameters: tuple[Any, ...] = ()) -> Any: ...
+
+
+async def insert_run(db: SqlExecutor, run: dict[str, Any]) -> None:
+    placeholders = ",".join("?" for _ in RUN_FIELDS)
+    await db.execute(f"INSERT INTO runs VALUES({placeholders})", tuple(run[field] for field in RUN_FIELDS))
 
 
 class RunStore:
@@ -58,30 +86,7 @@ class RunStore:
             "triggered_at": extra.get("triggered_at"),
             "mode": mode,
         }
-        await self.db.execute(
-            "INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            tuple(
-                run[k]
-                for k in (
-                    "id",
-                    "conversation_id",
-                    "status",
-                    "user_message",
-                    "created_at",
-                    "started_at",
-                    "updated_at",
-                    "completed_at",
-                    "error",
-                    "stop_reason",
-                    "recovered_from_run_id",
-                    "source",
-                    "source_id",
-                    "scheduled_for",
-                    "triggered_at",
-                    "mode",
-                )
-            ),
-        )
+        await insert_run(self.db, run)
         return run
 
     async def save(self, run: dict[str, Any]) -> None:
@@ -131,7 +136,9 @@ class RunStore:
             ),
         )
         # Keep the full model request in the durable log without flooding the UI.
-        broadcast_event = {key: value for key, value in event.items() if key != "request"} if kind == "model_request" else event
+        broadcast_event = (
+            {key: value for key, value in event.items() if key != "request"} if kind == "model_request" else event
+        )
         await self._broadcast()("agent.event", broadcast_event)
         return event
 
@@ -226,7 +233,9 @@ class RunStore:
             events
             if params.get("include_model_requests") is True
             else [
-                {key: value for key, value in event.items() if key != "request"} if event.get("type") == "model_request" else event
+                {key: value for key, value in event.items() if key != "request"}
+                if event.get("type") == "model_request"
+                else event
                 for event in events
             ]
         )

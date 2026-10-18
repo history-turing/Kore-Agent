@@ -65,12 +65,11 @@ def summarize_run_usage(events: list[dict[str, Any]], budget: RunBudget) -> dict
 
     main = _aggregate_usages(list(main_by_step.values()))
     auxiliary = {role: _aggregate_usages(calls) for role, calls in auxiliary_calls.items()}
-    provider_total = _aggregate_usages([*main_by_step.values(), *(call for calls in auxiliary_calls.values() for call in calls)])
+    provider_total = _aggregate_usages(
+        [*main_by_step.values(), *(call for calls in auxiliary_calls.values() for call in calls)]
+    )
 
-    budget_usage = {
-        field: int(main[field] or 0) + int(inherited_usage.get(field) or 0)
-        for field in USAGE_FIELDS
-    }
+    budget_usage = {field: int(main[field] or 0) + int(inherited_usage.get(field) or 0) for field in USAGE_FIELDS}
     decision = budget.evaluate(budget_usage, int(main["model_calls"] or 0) + inherited_model_calls)
     budget_info = budget.event_fields(decision)
     for event in events:

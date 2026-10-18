@@ -7,7 +7,9 @@ import shlex
 from ..config import Settings
 
 CONTAINER_BOOTSTRAP = (
-    "if [ -f /opt/miniconda3/bin/activate ]; then source /opt/miniconda3/bin/activate; conda activate testbed 2>/dev/null || true; fi"
+    "if [ -f /opt/miniconda3/bin/activate ]; then "
+    "source /opt/miniconda3/bin/activate; "
+    "conda activate testbed 2>/dev/null || true; fi"
 )
 
 

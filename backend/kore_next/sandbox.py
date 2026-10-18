@@ -120,7 +120,12 @@ class SandboxSupervisor:
         network: str = "allowed",
     ) -> ProcessResult:
         launch = self.prepare_launch(
-            executable, args, cwd=cwd, env=env, filesystem=filesystem, network=network,
+            executable,
+            args,
+            cwd=cwd,
+            env=env,
+            filesystem=filesystem,
+            network=network,
         )
 
         process: asyncio.subprocess.Process | None = None

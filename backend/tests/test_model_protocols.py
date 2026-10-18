@@ -160,7 +160,9 @@ async def test_anthropic_messages_converts_tools_and_history(monkeypatch):
         )
 
     _mock_client(monkeypatch, protocol, handler)
-    settings = Settings(provider="anthropic", model="claude-test", base_url="https://api.anthropic.com/v1", api_key="key")
+    settings = Settings(
+        provider="anthropic", model="claude-test", base_url="https://api.anthropic.com/v1", api_key="key"
+    )
     client = ModelClient(
         settings,
         {

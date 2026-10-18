@@ -12,6 +12,8 @@ jobs:
         working-directory: backend
       - run: ruff check .
         working-directory: backend
+      - run: ruff format --check .
+        working-directory: backend
       - run: python -m compileall -q kore_next
         working-directory: backend
   desktop:
@@ -23,6 +25,8 @@ jobs:
       - run: npm ci
         working-directory: desktop
       - run: npm run typecheck
+        working-directory: desktop
+      - run: npm run format:check
         working-directory: desktop
       - run: npm run build
         working-directory: desktop
