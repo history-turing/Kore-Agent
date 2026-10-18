@@ -167,3 +167,40 @@ docker load -i image.tar
 - 各组原始运行目录：`exp03-astropy`、`exp03-pytest`、`exp03-sympy`、`exp03-requests`、`exp03-flask`
 
 说明：扩展题使用同一 `environment_setup_commit` 的 seed 镜像并在宿主侧 fetch base commit，评估时把 seed 镜像重新 tag 成目标 instance 的镜像名；这是为了绕开镜像下载限速，环境版本一致，但不是官方逐题构建镜像。
+
+## 阶段 1+2 实测（2026-10-18）
+
+改动内容：
+
+- benchmark 模式下 Shell 超时上限 120 秒，拦截全量测试、全仓库扫描等宽泛命令；
+- 预算分阶段（探索/实现/验证/收尾），40% 后要求开始写 patch，70% 后要求定向验证；
+- 记录 `first_edit_step`、`blocked_tool_calls`、`stop_reason`、累计 tokens，并提供 `failure_report.py` 归因；
+- 修复 DeepSeek 返回的 DSML 工具调用文本未被解析的问题。
+
+固定 12 条题、`deepseek-flash`、40 步预算的对照：
+
+| 版本 | resolved | unresolved | empty patch |
+|---|---:|---:|---:|
+| 改动前 | 5/12 | 3 | 4 |
+| 改动后 | 6/12 | 6 | 0 |
+| 加上 400k token 重跑（最佳 patch 合并） | **7/12** | 5 | 0 |
+
+最终 resolved 的 7 条：astropy-12907、flask-5014、requests-1142、pytest-10051、pytest-10081、pytest-10356、sympy-11618。
+
+剩余 5 条归因：
+
+| instance | 失败原因 |
+|---|---|
+| astropy-13033 | 已改到 `timeseries/core.py`，但错误信息格式与隐藏测试期望不一致 |
+| sympy-12096 | 递归 evalf 结果，而正确修复是对参数先 `evalf`，语义不匹配 |
+| sympy-12481 | 重复 cycle 检查已移除，但组合顺序/边界行为仍不符合测试 |
+| sympy-12419 | 在约 330k tokens 的收尾阈值被截断，留下部分 patch |
+| sympy-12489 | 在约 330k tokens 的收尾阈值被截断，留下部分 patch |
+
+结论：工具策略和分阶段预算把空 patch 从 4 条降到 0 条，resolved 从 5 升到 6；提高 token 预算又救回 1 条，最终 7/12（58.3%）。剩余问题主要是语义正确性与上下文 token 效率，不再是“找不到代码”或“没有产出 patch”。
+
+产物：
+
+- `backend/.koreagent-next/bench/final-results/predictions.json`
+- `backend/.koreagent-next/bench/final-results/eval/`
+- `backend/.koreagent-next/bench/final-results/failure-report.json`
