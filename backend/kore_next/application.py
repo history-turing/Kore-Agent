@@ -341,6 +341,13 @@ class Application:
         async with self.runs.transaction() as conn:
             await self.conversations.add_message(cid, {"role": "user", "content": content}, conn=conn)
             run = await self.runs.create(cid, content, mode, conn=conn)
+            user_event = await self.runs.event(
+                run,
+                "user_message",
+                conn=conn,
+                message={"role": "user", "content": content},
+            )
+        await self.runs.broadcast_event(user_event)
         task = asyncio.create_task(self._execute_run(run))
         self.running[run["id"]] = task
         try:

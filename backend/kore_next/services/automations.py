@@ -251,6 +251,18 @@ class AutomationService:
                 "mode": "normal",
             }
             await insert_run(db, run)
+            await self.runs.runtime_event_store.append(
+                db,
+                run=run,
+                event={
+                    "event_id": uid(),
+                    "conversation_id": cid,
+                    "sequence": 1,
+                    "type": "user_message",
+                    "event_time": stamp,
+                    "message": {"role": "user", "content": item["prompt"]},
+                },
+            )
             trigger_id = hashlib.sha256(f"{automation_id}\0{scheduled_for}".encode()).hexdigest()
             await db.execute(
                 "INSERT INTO automation_occurrences VALUES(?,?,?,?,?,?)",

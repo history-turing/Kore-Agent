@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS events(
  event_time TEXT NOT NULL, data_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_run_sequence ON events(run_id, sequence);
+CREATE TABLE IF NOT EXISTS runtime_events(
+ event_id TEXT PRIMARY KEY, conversation_id TEXT, turn_id TEXT NOT NULL, run_id TEXT NOT NULL,
+ invocation_id TEXT, event_seq INTEGER NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL,
+ created_at TEXT NOT NULL, schema_version INTEGER NOT NULL, prev_digest TEXT, digest TEXT NOT NULL,
+ UNIQUE(run_id, event_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_events_conversation ON runtime_events(conversation_id, event_seq);
+CREATE INDEX IF NOT EXISTS idx_runtime_events_type ON runtime_events(run_id, type);
 CREATE TABLE IF NOT EXISTS tool_executions(
  run_id TEXT NOT NULL, call_id TEXT NOT NULL, step INTEGER NOT NULL, tool_name TEXT NOT NULL,
  arguments_hash TEXT NOT NULL, status TEXT NOT NULL, output_hash TEXT, error TEXT,
@@ -95,7 +103,7 @@ CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 """
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class Database:

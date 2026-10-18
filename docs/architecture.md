@@ -27,7 +27,9 @@ kore_next/
     shell.py              Shell argv 构造
   services/
     conversations.py      会话持久化与搜索
-    runs.py               Run 记录、事件日志、恢复与 Trace
+    runs.py               Run 记录、事件写入、恢复与 Trace
+    runtime_events.py     Append-only 事件封套、序号与 digest 链
+    runtime_projections.py 消息与终态投影
     run_engine.py         Agent 主循环
     run_postprocessing.py 上下文摘要、反思与计划提取
     model_settings.py     模型配置与后台角色
@@ -68,7 +70,8 @@ conversation.send
   -> protocol adapter
   -> ToolExecutor.execute
   -> ServiceToolRouter.call
-  -> RunStore.event / CheckpointStore.save
+  -> RunStore.event（events + runtime_events 双写）
+  -> CheckpointStore.save
 
 automation tick
   -> AutomationService.loop
@@ -94,5 +97,12 @@ automation tick
 - `ContextManager` 在进入模型请求前完成预算检查与压缩。
 - `RunBudget` 在请求前后各检查一次，避免超限后继续调用。
 - `EvidenceStore.search` 只遍历一次结果集，并在达到 limit 后停止。
-- `RunStore.event` 使用单次 `MAX(sequence)` 查询和一次 INSERT。
+- `RunStore.event` 在同一个短事务里写入兼容 Trace 和 `runtime_events`；事件序号按 Run 单调递增，并维护 `prev_digest → digest` 链。
+- 恢复优先使用检查点中的阶段、待执行工具和 `tool_executions` 状态；存在已派发但未记录结果的工具时，要求人工核对，不自动重放。
 - 前端页面在构建时静态打包，生产环境不会因文件拆分产生额外请求。
+
+## 运行事实与投影
+
+`runtime_events` 是新增的运行事实日志，记录 `turn_id`、`run_id`、`invocation_id`、`event_seq` 和 digest。现有 `events` 表暂时保留用于兼容 Trace；后续阶段会把 UI、模型上下文和终态读取逐步切换到同一份事件日志。
+
+`runtime_projections.py` 提供纯函数式的消息与终态投影。投影只读取事件，不修改事件历史；工具执行状态由 `tool_executions` 表持久化，派发和结果分别提交。

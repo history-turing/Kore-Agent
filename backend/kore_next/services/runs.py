@@ -12,6 +12,7 @@ from ..rpc import RpcFault, required
 from ..run_insights import summarize_run_usage
 from ..runtime_policy import RunBudget
 from ..util import dumps, loads, now, uid
+from .runtime_events import RuntimeEventStore
 
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 ExecuteRun = Callable[[dict[str, Any], dict[str, Any] | None], Awaitable[dict[str, Any]]]
@@ -71,6 +72,7 @@ class RunStore:
         self._broadcast = broadcast
         self.running = running
         self.execute_run = execute_run
+        self.runtime_event_store = RuntimeEventStore(db)
 
     def transaction(self) -> Any:
         return self.db.transaction()
@@ -95,6 +97,7 @@ class RunStore:
             "source_id": extra.get("source_id"),
             "scheduled_for": extra.get("scheduled_for"),
             "triggered_at": extra.get("triggered_at"),
+            "turn_id": extra.get("turn_id") or rid,
             "mode": mode,
         }
         await insert_run(self.db, run, conn)
@@ -133,6 +136,8 @@ class RunStore:
 
     async def _event_on(self, conn: Any, run: dict[str, Any], kind: str, **data: Any) -> dict[str, Any]:
         settings = self._settings()
+        step = data.pop("step", None)
+        invocation_id = data.pop("invocation_id", None)
         row = await self.db.fetchone_on(
             conn,
             "SELECT COALESCE(MAX(sequence),0)+1 AS n FROM events WHERE run_id=?",
@@ -145,11 +150,14 @@ class RunStore:
             "sequence": row["n"],
             "type": kind,
             "event_time": now(),
-            "step": data.pop("step", None),
+            "step": step,
             "provider": settings.provider,
             "model": settings.model,
             **data,
         }
+        if invocation_id or step is not None:
+            event["invocation_id"] = invocation_id or f"{run['id']}:{step}"
+        await self.runtime_event_store.append(conn, run=run, event=event)
         await self.db.execute_on(
             conn,
             "INSERT INTO events VALUES(?,?,?,?,?,?)",
@@ -171,6 +179,12 @@ class RunStore:
             {key: value for key, value in event.items() if key != "request"} if kind == "model_request" else event
         )
         await self._broadcast()("agent.event", broadcast_event)
+
+    async def runtime_events(self, run_id: str, *, after_seq: int = 0, limit: int = 500) -> list[dict[str, Any]]:
+        return await self.runtime_event_store.list(run_id, after_seq=after_seq, limit=limit)
+
+    async def verify_events(self, run_id: str) -> dict[str, Any]:
+        return await self.runtime_event_store.verify(run_id)
 
     async def begin_tool(self, run: dict[str, Any], call: dict[str, Any], step: int) -> dict[str, Any]:
         """Persist the dispatch boundary before a tool can cause side effects."""
@@ -282,6 +296,15 @@ class RunStore:
                 "UPDATE runs SET status='interrupted',stop_reason='interrupted' WHERE id=?",
                 (result["run"]["id"],),
             )
+            run = (await self.get({"run_id": result["run"]["id"]}))["run"]
+            await self.event(
+                run,
+                "run_interrupted",
+                message=None,
+                tool_call=None,
+                tool_result=None,
+                usage=None,
+            )
         return await self.get(params)
 
     async def recover(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -327,6 +350,7 @@ class RunStore:
             source_id=old.get("source_id"),
             scheduled_for=old.get("scheduled_for"),
             triggered_at=old.get("triggered_at"),
+            turn_id=old.get("turn_id") or old["id"],
         )
         await self.checkpoints.save(
             run_id=run["id"],
