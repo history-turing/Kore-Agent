@@ -231,7 +231,11 @@ export function Chat({
     onSuccess: () => setLive((previous) => (previous ? { ...previous, status: 'interrupted' } : null)),
   })
   const recover = useMutation({
-    mutationFn: (id: string) => rpc.call('run.recover', { run_id: id }),
+    mutationFn: ({ id, workspacePath }: { id: string; workspacePath?: string | null }) =>
+      rpc.call('run.recover', {
+        run_id: id,
+        ...(workspacePath ? { workspace_path: workspacePath } : {}),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['runs', selected] })
       qc.invalidateQueries({ queryKey: ['conversation', selected] })
@@ -286,6 +290,15 @@ export function Chat({
   const chooseRunWorkspace = async () => {
     const path = await pickWorkspace()
     if (path) setRunWorkspace(path)
+  }
+  const recoverRun = async (id: string) => {
+    try {
+      await recover.mutateAsync({ id })
+    } catch (error: any) {
+      if (error?.data?.code !== 'workspace_unavailable') return
+      const path = await pickWorkspace()
+      if (path) recover.mutate({ id, workspacePath: path })
+    }
   }
   const pin = (id: string) => {
     const next = pinned.includes(id) ? pinned.filter((item) => item !== id) : [...pinned, id]
@@ -437,7 +450,7 @@ export function Chat({
               run={currentRun}
               onOpenRun={onOpenRun}
               recovering={recover.isPending}
-              onRecover={(id) => recover.mutate(id)}
+              onRecover={(id) => void recoverRun(id)}
               resolving={resolveTool.isPending}
               onResolveTool={resolveUnknownTool}
             />

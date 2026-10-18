@@ -48,6 +48,7 @@ export interface Automation {
   id: string
   title: string
   prompt: string
+  workspace_path?: string | null
   status: string
   schedule: {
     kind: string

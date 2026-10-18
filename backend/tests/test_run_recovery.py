@@ -472,3 +472,75 @@ async def test_unknown_tool_can_be_abandoned_and_repairs_conversation(recovery_a
     with pytest.raises(RpcFault) as error:
         await app.run_recover({"run_id": run["id"]})
     assert error.value.code == -32001
+
+
+async def test_recovery_uses_workspace_snapshot_and_supports_rebinding(recovery_app, tmp_path):
+    app = recovery_app
+    project = tmp_path / "project"
+    project.mkdir()
+    conversation = (await app.conversation_create({"workspace_path": str(project)}))["conversation"]
+    await app.conversations.add_message(conversation["id"], {"role": "user", "content": "recover workspace"})
+    run = await app.runs.create(
+        conversation["id"],
+        "recover workspace",
+        "normal",
+        workspace_path=str(project.resolve()),
+        workspace_source="conversation",
+    )
+    state = {
+        "phase": "final_ready",
+        "model_messages": [],
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "next_step": 1,
+        "plan_task_id": None,
+        "activated_tools": [],
+        "tool_activation_steps": {},
+        "model_calls": 0,
+        "pending_tool_calls": [],
+        "tool_cursor": 0,
+        "completed_call_ids": [],
+        "final": "recovered",
+    }
+    await app.checkpoints.save(
+        run_id=run["id"],
+        conversation_id=conversation["id"],
+        sequence=1,
+        state=state,
+        through_event_seq=0,
+        digest=None,
+    )
+    await app.runs.db.execute("UPDATE runs SET status='failed' WHERE id=?", (run["id"],))
+    recovered = await app.runs.recover({"run_id": run["id"]})
+    assert recovered["run"]["workspace_path"] == str(project.resolve())
+    assert recovered["run"]["workspace_source"] == "conversation"
+
+    missing = tmp_path / "missing-project"
+    missing.mkdir()
+    missing_conversation = (await app.conversation_create({"workspace_path": str(missing)}))["conversation"]
+    missing_run = await app.runs.create(
+        missing_conversation["id"],
+        "missing workspace",
+        "normal",
+        workspace_path=str(missing.resolve()),
+        workspace_source="conversation",
+    )
+    await app.checkpoints.save(
+        run_id=missing_run["id"],
+        conversation_id=missing_conversation["id"],
+        sequence=1,
+        state={**state, "final": "rebound"},
+        through_event_seq=0,
+        digest=None,
+    )
+    await app.runs.db.execute("UPDATE runs SET status='failed' WHERE id=?", (missing_run["id"],))
+    missing.rmdir()
+
+    with pytest.raises(RpcFault) as error:
+        await app.runs.recover({"run_id": missing_run["id"]})
+    assert error.value.data["code"] == "workspace_unavailable"
+
+    rebound = tmp_path / "rebound-project"
+    rebound.mkdir()
+    recovered = await app.runs.recover({"run_id": missing_run["id"], "workspace_path": str(rebound)})
+    assert recovered["run"]["workspace_path"] == str(rebound.resolve())
+    assert recovered["run"]["workspace_source"] == "run_override"

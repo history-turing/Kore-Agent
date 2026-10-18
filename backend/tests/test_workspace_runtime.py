@@ -96,6 +96,10 @@ async def test_run_uses_conversation_workspace_and_snapshots_it(workspace_app, m
     stored = (await app.runs.get({"run_id": run["id"]}))["run"]
     assert stored["workspace_path"] == str(project.resolve())
     assert stored["workspace_source"] == "conversation"
+    events = await app.runs.runtime_events(run["id"])
+    resolved = next(event for event in events if event["type"] == "workspace_resolved")
+    assert resolved["workspace"]["path"] == str(project.resolve())
+    assert resolved["workspace"]["source"] == "conversation"
 
 
 async def test_run_override_reads_from_its_own_workspace(workspace_app, monkeypatch, tmp_path):

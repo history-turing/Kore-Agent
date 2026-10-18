@@ -173,6 +173,28 @@ async def test_workspace_rpc_validates_and_applies_run_override(app, tmp_path):
     ] is None
 
 
+async def test_automation_workspace_is_persisted_and_snapshotted(app, tmp_path):
+    project = tmp_path / "automation-project"
+    project.mkdir()
+    automation = (
+        await app.automation_create(
+            {
+                "title": "Workspace automation",
+                "prompt": "inspect",
+                "kind": "once",
+                "run_at": "2020-01-01T00:00:00Z",
+                "workspace_path": str(project),
+            }
+        )
+    )["automation"]
+    assert automation["workspace_path"] == str(project.resolve())
+
+    run = await app.automations.claim_occurrence(automation["id"])
+    assert run is not None
+    assert run["workspace_path"] == str(project.resolve())
+    assert run["workspace_source"] == "automation"
+
+
 async def test_run_records_effective_workspace_snapshot(app, tmp_path):
     conversation = (await app.conversation_create({}))["conversation"]
     project = tmp_path / "project"

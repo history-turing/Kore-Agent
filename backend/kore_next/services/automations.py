@@ -12,6 +12,7 @@ from croniter import croniter
 from ..database import Database
 from ..rpc import RpcFault, required
 from ..util import dumps, loads, now, uid
+from ..workspace import WorkspaceError, resolve_workspace
 from .runs import RunStore, insert_run
 
 ExecuteRun = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -66,11 +67,16 @@ class AutomationService:
             "timezone": params.get("timezone", "UTC"),
         }
         next_at = self.schedule_next(schedule, stamp)
+        try:
+            workspace = resolve_workspace(params.get("workspace_path"), source="automation")
+        except WorkspaceError as exc:
+            raise RpcFault(-32602, str(exc)) from exc
         item = {
             "id": aid,
             "title": str(required(params, "title")),
             "prompt": str(required(params, "prompt")),
             "conversation_id": params.get("conversation_id"),
+            "workspace_path": workspace.path,
             "status": "active",
             "schedule": schedule,
             "next_run_at": next_at,
@@ -249,8 +255,8 @@ class AutomationService:
                 "scheduled_for": scheduled_for,
                 "triggered_at": stamp,
                 "mode": "normal",
-                "workspace_path": None,
-                "workspace_source": "none",
+                "workspace_path": item.get("workspace_path"),
+                "workspace_source": "automation" if item.get("workspace_path") else "none",
             }
             await insert_run(db, run)
             await self.runs.runtime_event_store.append(

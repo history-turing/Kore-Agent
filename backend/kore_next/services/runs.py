@@ -14,6 +14,7 @@ from ..runtime_policy import RunBudget
 from ..tools.errors import DuplicateToolCall
 from ..tools.policies import tool_policy
 from ..util import dumps, loads, now, uid
+from ..workspace import WorkspaceError, resolve_workspace
 from .conversations import ConversationService
 from .runtime_events import RuntimeEventStore
 from .runtime_projections import order_tool_messages, project_model_messages
@@ -438,6 +439,22 @@ class RunStore:
         )
         if active:
             raise RpcFault(-32001, "Run recovery is already in progress", {"run_id": active["id"]})
+        workspace_source = (
+            "run_override" if params.get("workspace_path") else str(old.get("workspace_source") or "conversation")
+        )
+        if workspace_source not in {"automation", "conversation", "run_override", "legacy_default"}:
+            workspace_source = "conversation"
+        try:
+            workspace = resolve_workspace(
+                params.get("workspace_path") or old.get("workspace_path"),
+                source=workspace_source,
+            )
+        except WorkspaceError as exc:
+            raise RpcFault(
+                -32001,
+                f"Workspace is unavailable: {exc}",
+                {"code": "workspace_unavailable", "run_id": old["id"]},
+            ) from exc
         state = dict(checkpoint["state"])
         state["recovered_from_run_id"] = old["id"]
         through_event_seq = int(checkpoint.get("through_event_seq") or 0)
@@ -509,6 +526,8 @@ class RunStore:
             scheduled_for=old.get("scheduled_for"),
             triggered_at=old.get("triggered_at"),
             turn_id=old.get("turn_id") or old["id"],
+            workspace_path=workspace.path,
+            workspace_source=workspace.source,
         )
         await self.checkpoints.save(
             run_id=run["id"],

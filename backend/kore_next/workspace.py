@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-WorkspaceSource = Literal["conversation", "run_override", "legacy_default", "none"]
+WorkspaceSource = Literal["automation", "conversation", "run_override", "legacy_default", "none"]
 
 
 class WorkspaceError(ValueError):

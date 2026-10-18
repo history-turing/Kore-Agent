@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Clock3, Plus } from 'lucide-react'
+import { Clock3, FolderOpen, Plus, X } from 'lucide-react'
 import { useConfirmAction } from '../ConfirmDialog'
 import { rpc } from '../rpc'
 import type { Automation } from '../types'
@@ -56,6 +56,14 @@ export function Automations() {
               <dd>{item.next_run_at ? new Date(item.next_run_at).toLocaleString() : '—'}</dd>
               <dt>上次运行</dt>
               <dd>{item.last_run_at ? new Date(item.last_run_at).toLocaleString() : '尚未运行'}</dd>
+              {item.workspace_path && (
+                <>
+                  <dt>工作区</dt>
+                  <dd className="mono" title={item.workspace_path}>
+                    {item.workspace_path}
+                  </dd>
+                </>
+              )}
             </dl>
             <div className="card-actions">
               {item.status === 'active' ? (
@@ -108,6 +116,7 @@ function AutomationForm({ close, done }: { close(): void; done(): void }) {
     interval_seconds: '3600',
     cron_expr: '0 9 * * *',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+    workspace_path: '',
   })
   const title = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -124,6 +133,7 @@ function AutomationForm({ close, done }: { close(): void; done(): void }) {
         ...form,
         run_at: form.run_at ? new Date(form.run_at).toISOString() : undefined,
         interval_seconds: Number(form.interval_seconds) || undefined,
+        workspace_path: form.workspace_path || undefined,
       }),
     onSuccess: done,
   })
@@ -161,6 +171,33 @@ function AutomationForm({ close, done }: { close(): void; done(): void }) {
             onChange={(e) => setForm({ ...form, prompt: e.target.value })}
             required
           />
+        </label>
+        <label>
+          工作区（可选）
+          <div className="row-actions">
+            <input
+              value={form.workspace_path}
+              onChange={(e) => setForm({ ...form, workspace_path: e.target.value })}
+              placeholder="仅聊天任务可留空"
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                const path = window.koreNext?.chooseWorkspace
+                  ? await window.koreNext.chooseWorkspace()
+                  : window.prompt('输入工作区绝对路径')
+                if (path) setForm({ ...form, workspace_path: path })
+              }}
+            >
+              <FolderOpen size={14} />
+              选择
+            </button>
+            {form.workspace_path && (
+              <button type="button" className="icon" onClick={() => setForm({ ...form, workspace_path: '' })}>
+                <X size={13} />
+              </button>
+            )}
+          </div>
         </label>
         <label>
           类型

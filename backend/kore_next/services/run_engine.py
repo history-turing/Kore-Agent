@@ -118,6 +118,20 @@ class RunEngine:
             model = ModelClient(settings, model_config)
             conversation = await self.conversations.get({"conversation_id": run["conversation_id"]})
             workspace = await self._resolve_run_workspace(run, conversation["conversation"])
+            await self.runs.event(
+                run,
+                "workspace_resolved",
+                message=None,
+                tool_call=None,
+                tool_result=None,
+                usage=None,
+                workspace={
+                    "path": workspace.path,
+                    "name": workspace.name,
+                    "source": workspace.source,
+                    "available": workspace.available,
+                },
+            )
             if recovery_state:
                 # Recovery resumes from model-facing messages and cumulative usage,
                 # so the new run inherits its predecessor's budget and tool state.
@@ -644,7 +658,7 @@ class RunEngine:
     ) -> WorkspaceContext:
         workspace_path = run.get("workspace_path") or conversation.get("workspace_path")
         source = run.get("workspace_source") or ("conversation" if workspace_path else "none")
-        if source not in {"conversation", "run_override", "legacy_default"}:
+        if source not in {"automation", "conversation", "run_override", "legacy_default"}:
             source = "conversation" if workspace_path else "none"
         try:
             workspace = resolve_workspace(workspace_path, source=source)
