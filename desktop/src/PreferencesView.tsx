@@ -99,7 +99,7 @@ function PreferencesView() {
               <dd>
                 {capabilities?.shell_backend || '未知'}
                 {capabilities?.shell_interpreter ? ` · ${capabilities.shell_interpreter}` : ''}
-                {capabilities?.shell_host_enabled ? ' · host 已启用' : ''}
+                {capabilities?.shell_host_enabled ? ' · 已启用' : ' · 未启用'}
               </dd>
             </dl>
             {info.data?.legacy_permission_rules_needing_review > 0 && (
