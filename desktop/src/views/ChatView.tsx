@@ -19,11 +19,21 @@ import {
   X,
 } from 'lucide-react'
 import { artifactContentUrl } from '../apiConfig'
-import { approvalTitle, permissionScopeLabel } from '../approvalPresentation'
+import { ApprovalControls } from '../ApprovalControls'
+import { approvalTitle } from '../approvalPresentation'
 import { useConfirmAction } from '../ConfirmDialog'
 import { reduceAgentEvent, type LiveRunState } from '../liveState'
 import { rpc } from '../rpc'
-import type { Approval, Artifact, Conversation, Message, PermissionScope, Run, Task } from '../types'
+import type {
+  Approval,
+  Artifact,
+  Conversation,
+  Message,
+  PermissionMatch,
+  PermissionScope,
+  Run,
+  Task,
+} from '../types'
 import { Busy, Empty, ErrorBox, Status, openUrl, statusChinese } from '../ui'
 
 const starterPrompts = [
@@ -222,8 +232,17 @@ export function Chat({
   )
   const pendingApproval = approvals.data?.find((item) => !live?.runId || item.run_id === live.runId)
   const approval = useMutation({
-    mutationFn: ({ id, yes, scope }: { id: string; yes: boolean; scope: PermissionScope }) =>
-      rpc.call(yes ? 'approval.approve' : 'approval.deny', { approval_id: id, scope }),
+    mutationFn: ({
+      id,
+      yes,
+      scope,
+      match,
+    }: {
+      id: string
+      yes: boolean
+      scope: PermissionScope
+      match: PermissionMatch
+    }) => rpc.call(yes ? 'approval.approve' : 'approval.deny', { approval_id: id, scope, match }),
     onSuccess: () => approvals.refetch(),
   })
   const interrupt = useMutation({
@@ -497,7 +516,7 @@ export function Chat({
               <InlineApproval
                 approval={pendingApproval}
                 pending={approval.isPending}
-                decide={(yes, scope) => approval.mutate({ id: pendingApproval.id, yes, scope })}
+                decide={(yes, scope, match) => approval.mutate({ id: pendingApproval.id, yes, scope, match })}
               />
             )}{' '}
             {send.error && <ErrorBox error={send.error} />}{' '}
@@ -775,32 +794,30 @@ function InlineApproval({
 }: {
   approval: Approval
   pending: boolean
-  decide(yes: boolean, scope: PermissionScope): void
+  decide(yes: boolean, scope: PermissionScope, match: PermissionMatch): void
 }) {
   const [scope, setScope] = useState<PermissionScope>('once')
+  const [match, setMatch] = useState<PermissionMatch>('arguments')
   return (
     <section className="inline-approval" role="alert">
       <div>
         <strong>等待允许：{approvalTitle(approval)}</strong>
         <p>{approval.reason}</p>
-        <small>记住授权仅适用于工具和完整参数都相同的操作；换一个命令或内容需要重新审批。</small>
+        <small>授权只在所选匹配范围内生效；选择“所有参数”会跳过之后同类操作的审批。</small>
       </div>
       <div>
-        <select
-          value={scope}
-          onChange={(e) => setScope(e.target.value as PermissionScope)}
-          aria-label="允许范围"
-        >
-          {(approval.available_scopes || ['once']).map((item) => (
-            <option value={item} key={item}>
-              {permissionScopeLabel(item)}
-            </option>
-          ))}
-        </select>
-        <button disabled={pending} onClick={() => decide(false, 'once')}>
+        <ApprovalControls
+          approval={approval}
+          scope={scope}
+          match={match}
+          onScopeChange={setScope}
+          onMatchChange={setMatch}
+          disabled={pending}
+        />
+        <button disabled={pending} onClick={() => decide(false, 'once', 'arguments')}>
           拒绝
         </button>
-        <button className="primary" disabled={pending} onClick={() => decide(true, scope)}>
+        <button className="primary" disabled={pending} onClick={() => decide(true, scope, match)}>
           允许
         </button>
       </div>

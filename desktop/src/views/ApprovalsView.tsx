@@ -1,9 +1,15 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { CheckCircle2, ShieldCheck, XCircle } from 'lucide-react'
-import { approvalFacts, approvalTitle, permissionScopeLabel } from '../approvalPresentation'
+import { ApprovalControls } from '../ApprovalControls'
+import {
+  approvalFacts,
+  approvalTitle,
+  permissionMatchLabel,
+  permissionScopeLabel,
+} from '../approvalPresentation'
 import { rpc } from '../rpc'
-import type { Approval, PermissionScope } from '../types'
+import type { Approval, PermissionMatch, PermissionScope } from '../types'
 import { Empty, ErrorBox, Page, Status } from '../ui'
 
 export function Approvals() {
@@ -14,9 +20,19 @@ export function Approvals() {
     refetchInterval: 15000,
   })
   const [scopes, setScopes] = useState<Record<string, PermissionScope>>({})
+  const [matches, setMatches] = useState<Record<string, PermissionMatch>>({})
   const action = useMutation({
-    mutationFn: ({ id, yes, scope }: { id: string; yes: boolean; scope: PermissionScope }) =>
-      rpc.call(yes ? 'approval.approve' : 'approval.deny', { approval_id: id, scope }),
+    mutationFn: ({
+      id,
+      yes,
+      scope,
+      match,
+    }: {
+      id: string
+      yes: boolean
+      scope: PermissionScope
+      match: PermissionMatch
+    }) => rpc.call(yes ? 'approval.approve' : 'approval.deny', { approval_id: id, scope, match }),
     onSuccess: () => query.refetch(),
   })
   return (
@@ -34,6 +50,7 @@ export function Approvals() {
               <small>
                 Run {item.run_id?.slice(0, 8) || '—'} · {new Date(item.created_at).toLocaleString()}
                 {item.resolution_scope ? ` · ${permissionScopeLabel(item.resolution_scope)}` : ''}
+                {item.resolution_match ? ` · ${permissionMatchLabel(item.resolution_match)}` : ''}
               </small>
               <dl className="approval-facts">
                 {approvalFacts(item.arguments).map(([key, value]) => (
@@ -50,21 +67,20 @@ export function Approvals() {
             </div>
             {item.status === 'pending' && (
               <div className="approval-actions">
-                <select
-                  value={scopes[item.id] || 'once'}
-                  onChange={(e) => setScopes({ ...scopes, [item.id]: e.target.value as PermissionScope })}
-                  aria-label="允许范围"
-                >
-                  {(item.available_scopes || ['once', 'run', 'conversation', 'global']).map((scope) => (
-                    <option value={scope} key={scope}>
-                      {permissionScopeLabel(scope)}
-                    </option>
-                  ))}
-                </select>
+                <ApprovalControls
+                  approval={item}
+                  scope={scopes[item.id] || 'once'}
+                  match={matches[item.id] || 'arguments'}
+                  onScopeChange={(scope) => setScopes({ ...scopes, [item.id]: scope })}
+                  onMatchChange={(match) => setMatches({ ...matches, [item.id]: match })}
+                  disabled={action.isPending}
+                />
                 <button
                   className="danger"
                   disabled={action.isPending}
-                  onClick={() => action.mutate({ id: item.id, yes: false, scope: 'once' })}
+                  onClick={() =>
+                    action.mutate({ id: item.id, yes: false, scope: 'once', match: 'arguments' })
+                  }
                 >
                   <XCircle size={15} />
                   拒绝
@@ -72,7 +88,14 @@ export function Approvals() {
                 <button
                   className="primary"
                   disabled={action.isPending}
-                  onClick={() => action.mutate({ id: item.id, yes: true, scope: scopes[item.id] || 'once' })}
+                  onClick={() =>
+                    action.mutate({
+                      id: item.id,
+                      yes: true,
+                      scope: scopes[item.id] || 'once',
+                      match: matches[item.id] || 'arguments',
+                    })
+                  }
                 >
                   <CheckCircle2 size={15} />
                   允许

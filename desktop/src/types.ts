@@ -40,10 +40,13 @@ export interface Approval {
   created_at: string
   resolved_at?: string | null
   resolution_scope?: PermissionScope
+  resolution_match?: PermissionMatch
   ui_scope?: string
   available_scopes?: PermissionScope[]
+  available_matches?: PermissionMatch[]
 }
 export type PermissionScope = 'once' | 'run' | 'conversation' | 'global'
+export type PermissionMatch = 'arguments' | 'command' | 'tool'
 export interface Automation {
   id: string
   title: string

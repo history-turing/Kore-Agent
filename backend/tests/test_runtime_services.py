@@ -410,6 +410,123 @@ async def test_permission_rules_match_empty_arguments_and_scope_priority(databas
     ).effect == "ask"
 
 
+async def test_permission_rules_command_match_ignores_timeout_but_not_command_or_workspace(database: Database):
+    store = PermissionRuleStore(database, signing_key=b"d" * 32)
+    await store.add(
+        tool_name="shell",
+        effect="allow",
+        scope="global",
+        scope_id="*",
+        arguments={"command": "git status", "timeout_seconds": 30, "workspace_root": r"D:\repo"},
+        description="Allow git status",
+        match="command",
+    )
+
+    same_command = await store.evaluate(
+        tool_name="shell",
+        conversation_id="c",
+        run_id="r",
+        arguments={"command": "git status", "timeout_seconds": 300, "workspace_root": r"D:\repo"},
+    )
+    changed_command = await store.evaluate(
+        tool_name="shell",
+        conversation_id="c",
+        run_id="r",
+        arguments={"command": "git diff", "timeout_seconds": 300, "workspace_root": r"D:\repo"},
+    )
+    other_workspace = await store.evaluate(
+        tool_name="shell",
+        conversation_id="c",
+        run_id="r",
+        arguments={"command": "git status", "timeout_seconds": 300, "workspace_root": r"D:\other"},
+    )
+
+    assert same_command.effect == "allow"
+    assert changed_command.effect == "ask"
+    assert other_workspace.effect == "ask"
+
+
+async def test_permission_rules_tool_match_and_exact_deny_precedence(database: Database):
+    store = PermissionRuleStore(database, signing_key=b"e" * 32)
+    await store.add(
+        tool_name="shell",
+        effect="allow",
+        scope="global",
+        scope_id="*",
+        arguments={},
+        description="Allow all shell commands",
+        match="tool",
+    )
+    await store.add(
+        tool_name="shell",
+        effect="deny",
+        scope="global",
+        scope_id="*",
+        arguments={"command": "rm -rf"},
+        description="Never remove files",
+        match="arguments",
+    )
+
+    assert (
+        await store.evaluate(
+            tool_name="shell",
+            conversation_id="c",
+            run_id="r",
+            arguments={"command": "git status"},
+        )
+    ).effect == "allow"
+    assert (
+        await store.evaluate(
+            tool_name="shell",
+            conversation_id="c",
+            run_id="r",
+            arguments={"command": "rm -rf"},
+        )
+    ).effect == "deny"
+
+
+async def test_permission_rules_keep_legacy_v2_argument_matchers(database: Database):
+    store = PermissionRuleStore(database, signing_key=b"f" * 32)
+    arguments = {"command": "echo legacy"}
+    await database.execute(
+        "INSERT INTO permission_rules(id,tool_name,effect,scope,scope_id,"
+        "matcher_json,description,created_at) VALUES(?,?,?,?,?,?,?,?)",
+        (
+            "legacy-v2",
+            "shell",
+            "allow",
+            "global",
+            "*",
+            dumps({"version": 2, "arguments_hmac": store._digest(arguments)}),
+            "Legacy exact rule",
+            now(),
+        ),
+    )
+
+    assert (
+        await store.evaluate(
+            tool_name="shell",
+            conversation_id="c",
+            run_id="r",
+            arguments=arguments,
+        )
+    ).effect == "allow"
+
+
+async def test_permission_command_match_requires_a_command(database: Database):
+    store = PermissionRuleStore(database, signing_key=b"g" * 32)
+    with pytest.raises(ValueError, match="command matching"):
+        await store.add(
+            tool_name="shell",
+            effect="allow",
+            scope="global",
+            scope_id="*",
+            arguments={"path": "README.md"},
+            description="invalid",
+            match="command",
+        )
+
+
 async def test_evidence_keeps_raw_output_and_filters_before_limit(database: Database):
     stamp = now()
     await database.execute(

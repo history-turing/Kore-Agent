@@ -966,6 +966,8 @@ summary:focus-visible {
 }
 .inline-approval > div:last-child {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 7px;
   flex: none;
 }
@@ -1614,6 +1616,28 @@ summary:focus-visible {
   border-radius: 8px;
   background: #fff;
   color: var(--ink);
+}
+.approval-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+}
+.approval-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.approval-control > span {
+  color: var(--muted);
+}
+.approval-warning {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.35;
 }
 .memory-title,
 .section-heading {

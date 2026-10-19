@@ -52,7 +52,7 @@ class NoComputer:
 
 def test_windows_runtime_prefers_pwsh_without_changing_default_policy():
     runtime = describe_shell(
-        settings(),
+        settings(shell_filesystem="workspace"),
         platform="win32",
         which=lambda name: r"C:\Program Files\PowerShell\7\pwsh.exe" if name == "pwsh" else None,
     )
@@ -233,7 +233,10 @@ def test_isolated_backends_use_host_process_with_their_own_sandbox():
         platform="win32",
         which=lambda name: wsl if name == "wsl" else None,
     ) == ("host", "allowed")
-    assert shell_sandbox_policy(settings(), platform="win32") == ("workspace", "allowed")
+    assert shell_sandbox_policy(settings(shell_filesystem="workspace"), platform="win32") == (
+        "workspace",
+        "allowed",
+    )
 
 
 def test_decode_output_handles_utf16_windows_diagnostics():

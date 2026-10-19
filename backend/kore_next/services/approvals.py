@@ -58,6 +58,9 @@ class ApprovalService:
         # explicit deny rule authoritative while allowing unattended tool use.
         if self._settings().auto_approve:
             return True
+        available_matches = ["arguments", "tool"]
+        if tool_name == "shell":
+            available_matches.insert(1, "command")
         approval = {
             "id": aid,
             "run_id": run_id,
@@ -74,6 +77,7 @@ class ApprovalService:
             "available_scopes": ["once", "run", "conversation", "global"]
             if self.permission_rules.signing_key
             else ["once"],
+            "available_matches": available_matches if self.permission_rules.signing_key else ["arguments"],
         }
         await self.db.execute("INSERT INTO approvals VALUES(?,?,?,?)", (aid, dumps(approval), "pending", stamp))
         future = asyncio.get_running_loop().create_future()
@@ -134,18 +138,31 @@ class ApprovalService:
             raise RpcFault(-32000, "Approval not found")
         return {"approval": loads(row["data_json"], {})}
 
-    async def resolve(self, aid: str, decision: bool, *, scope: str = "once") -> dict[str, Any]:
+    async def resolve(
+        self,
+        aid: str,
+        decision: bool,
+        *,
+        scope: str = "once",
+        match: str = "arguments",
+    ) -> dict[str, Any]:
         approval = (await self.get({"approval_id": aid}))["approval"]
         if approval["status"] != "pending":
             raise RpcFault(-32001, "Approval is already resolved")
         if scope not in {"once", "run", "conversation", "global"}:
             raise RpcFault(-32602, "scope must be once, run, conversation, or global")
+        if match not in self.permission_rules.MATCH_MODES:
+            raise RpcFault(-32602, "match must be arguments, command, or tool")
         if scope != "once" and self.permission_rules.signing_key is None:
             raise RpcFault(-32001, "Persistent approval rules require an OS-protected signing key")
+        if (
+            scope != "once"
+            and match == "command"
+            and not str((approval.get("arguments") or {}).get("command") or "").strip()
+        ):
+            raise RpcFault(-32602, "Command matching requires a shell command")
         rule = None
         if scope != "once":
-            # Persistent decisions are bound to the exact tool arguments and the
-            # chosen scope; an edited command must be approved separately.
             scope_id = {
                 "run": str(approval.get("run_id") or ""),
                 "conversation": str(approval.get("conversation_id") or ""),
@@ -160,11 +177,13 @@ class ApprovalService:
                 scope_id=scope_id,
                 arguments=approval.get("arguments") or {},
                 description=str(approval.get("reason") or "User decision"),
+                match=match,
             )
         approval.update(
             status="approved" if decision else "denied",
             resolved_at=now(),
             resolution_scope=scope,
+            resolution_match=match if scope != "once" else "arguments",
             created_rule_id=rule["id"] if rule else None,
         )
         await self.db.execute(
@@ -198,6 +217,7 @@ class ApprovalService:
             str(required(params, "approval_id")),
             True,
             scope=str(params.get("scope") or "once"),
+            match=str(params.get("match") or "arguments"),
         )
 
     async def deny(self, params: dict[str, Any]) -> dict[str, Any]:

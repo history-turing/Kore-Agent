@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, ShieldAlert, XCircle } from 'lucide-react'
-import { approvalFacts, approvalTitle, permissionScopeLabel } from './approvalPresentation'
+import { ApprovalControls } from './ApprovalControls'
+import { approvalFacts, approvalTitle } from './approvalPresentation'
 import { rpc } from './rpc'
-import type { Approval, PermissionScope } from './types'
+import type { Approval, PermissionMatch, PermissionScope } from './types'
 import { queueDesktopApproval, resolveApproval } from './liveState'
 
 export default function ApprovalWindow() {
   const [queue, setQueue] = useState<Approval[]>([])
   const [busy, setBusy] = useState(false)
   const [scope, setScope] = useState<PermissionScope>('once')
+  const [match, setMatch] = useState<PermissionMatch>('arguments')
   const current = queue[0]
 
   useEffect(() => {
@@ -45,9 +47,11 @@ export default function ApprovalWindow() {
       await rpc.call(yes ? 'approval.approve' : 'approval.deny', {
         approval_id: current.id,
         scope: yes ? scope : 'once',
+        match: yes ? match : 'arguments',
       })
       setQueue((items) => resolveApproval(items, current.id))
       setScope('once')
+      setMatch('arguments')
     } finally {
       setBusy(false)
     }
@@ -74,7 +78,7 @@ export default function ApprovalWindow() {
       <section>
         <h1>{approvalTitle(current)}</h1>
         <p>{current.reason}</p>
-        <p>记住授权仅适用于工具和完整参数都相同的操作；换一个命令或内容需要重新审批。</p>
+        <p>授权只在所选匹配范围内生效；选择“所有参数”会跳过之后同类操作的审批。</p>
         <code>{current.tool_name}</code>
         <dl className="approval-facts">
           {approvalFacts(current.arguments).map(([key, value]) => (
@@ -90,17 +94,14 @@ export default function ApprovalWindow() {
         </details>
       </section>
       <footer>
-        <select
-          value={scope}
-          onChange={(event) => setScope(event.target.value as PermissionScope)}
-          aria-label="允许范围"
-        >
-          {(current.available_scopes || ['once']).map((item) => (
-            <option key={item} value={item}>
-              {permissionScopeLabel(item)}
-            </option>
-          ))}
-        </select>
+        <ApprovalControls
+          approval={current}
+          scope={scope}
+          match={match}
+          onScopeChange={setScope}
+          onMatchChange={setMatch}
+          disabled={busy}
+        />
         <button disabled={busy} onClick={() => decide(false)}>
           <XCircle size={15} />
           拒绝

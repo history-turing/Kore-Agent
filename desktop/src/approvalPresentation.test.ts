@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { approvalFacts, approvalTitle, permissionScopeLabel } from './approvalPresentation'
+import {
+  approvalFacts,
+  approvalTitle,
+  permissionMatchLabel,
+  permissionScopeLabel,
+} from './approvalPresentation'
 
 describe('approval presentation', () => {
   it('turns protocol data into a human-readable action', () => {
@@ -8,5 +13,6 @@ describe('approval presentation', () => {
     )
     expect(approvalFacts({ text: 'x'.repeat(100) })[0][1]).toHaveLength(78)
     expect(permissionScopeLabel('conversation')).toBe('当前会话')
+    expect(permissionMatchLabel('command')).toContain('忽略超时')
   })
 })

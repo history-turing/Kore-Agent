@@ -1,4 +1,4 @@
-import type { Approval, PermissionScope } from './types'
+import type { Approval, PermissionMatch, PermissionScope } from './types'
 
 const toolLabels: Record<string, string> = {
   computer_click: '点击界面元素',
@@ -15,6 +15,12 @@ const scopeLabels: Record<PermissionScope, string> = {
   run: '本次运行',
   conversation: '当前会话',
   global: '始终允许',
+}
+
+const matchLabels: Record<PermissionMatch, string> = {
+  arguments: '完整参数',
+  command: '同一命令（忽略超时）',
+  tool: '所有参数',
 }
 
 export function approvalTitle(approval: Pick<Approval, 'tool_name' | 'arguments'>): string {
@@ -47,6 +53,10 @@ export function approvalFacts(argumentsValue: Record<string, unknown>): Array<[s
 
 export function permissionScopeLabel(scope: PermissionScope): string {
   return scopeLabels[scope]
+}
+
+export function permissionMatchLabel(match: PermissionMatch): string {
+  return matchLabels[match]
 }
 
 function redactText(value: string): string {

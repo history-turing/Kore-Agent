@@ -332,7 +332,8 @@ class Application:
     async def system_info(self, params: dict[str, Any]) -> dict[str, Any]:
         legacy_rules = await self.db.fetchone(
             "SELECT COUNT(*) AS n FROM permission_rules WHERE "
-            "json_extract(matcher_json, '$.version') IS NULL OR json_extract(matcher_json, '$.version')!=2"
+            "json_extract(matcher_json, '$.version') IS NULL "
+            "OR json_extract(matcher_json, '$.version') NOT IN (2,3)"
         )
         runtime_events = await self.db.fetchone("SELECT COUNT(*) AS n FROM runtime_events")
         offloads = await self.db.fetchone(

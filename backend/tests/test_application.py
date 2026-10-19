@@ -584,6 +584,85 @@ async def test_approval_is_single_use(app):
     assert error.value.code == -32001
 
 
+async def test_approval_can_persist_tool_level_match(app):
+    waiter = asyncio.create_task(
+        app.approvals.request(
+            "run-tool",
+            "call-tool",
+            {
+                "tool_name": "shell",
+                "command": "echo one",
+                "timeout_seconds": 30,
+                "workspace_root": r"D:\repo",
+            },
+            "执行本地命令",
+        )
+    )
+    approvals = []
+    for _ in range(50):
+        approvals = (await app.approval_list({"status": "pending"}))["approvals"]
+        if approvals:
+            break
+        await asyncio.sleep(0.01)
+    approval = approvals[0]
+    assert approval["available_matches"] == ["arguments", "command", "tool"]
+    await app.approval_approve({"approval_id": approval["id"], "scope": "global", "match": "tool"})
+    assert await waiter is True
+    resolved = (await app.approval_get({"approval_id": approval["id"]}))["approval"]
+    assert resolved["resolution_match"] == "tool"
+
+    verdict = await app.permission_rules.evaluate(
+        tool_name="shell",
+        conversation_id="other",
+        run_id="other",
+        arguments={
+            "tool_name": "shell",
+            "command": "echo two",
+            "timeout_seconds": 300,
+            "workspace_root": r"D:\repo",
+        },
+    )
+    assert verdict.effect == "allow"
+
+
+async def test_approval_can_persist_command_match_without_timeout(app):
+    waiter = asyncio.create_task(
+        app.approvals.request(
+            "run-command",
+            "call-command",
+            {
+                "tool_name": "shell",
+                "command": "git status",
+                "timeout_seconds": 30,
+                "workspace_root": r"D:\repo",
+            },
+            "执行本地命令",
+        )
+    )
+    approvals = []
+    for _ in range(50):
+        approvals = (await app.approval_list({"status": "pending"}))["approvals"]
+        if approvals:
+            break
+        await asyncio.sleep(0.01)
+    approval = approvals[0]
+    await app.approval_approve({"approval_id": approval["id"], "scope": "global", "match": "command"})
+    assert await waiter is True
+
+    verdict = await app.permission_rules.evaluate(
+        tool_name="shell",
+        conversation_id="other",
+        run_id="other",
+        arguments={
+            "tool_name": "shell",
+            "command": "git status",
+            "timeout_seconds": 300,
+            "workspace_root": r"D:\repo",
+        },
+    )
+    assert verdict.effect == "allow"
+
+
 async def test_skill_and_mcp_management(app):
     skill = (
         await app.skill_install(
