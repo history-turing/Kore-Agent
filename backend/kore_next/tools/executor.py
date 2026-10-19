@@ -36,7 +36,7 @@ from .errors import (
 from .policies import shell_policy_violation
 from .program import run_program
 from .projection import ToolProjection
-from .shell import shell_command_argv
+from .shell import shell_command_argv, shell_sandbox_policy
 from .validation import validate_arguments
 
 ApprovalGate = Callable[[str, str, dict[str, Any], str], Awaitable[bool]]
@@ -470,12 +470,13 @@ class ToolExecutor:
             timeout = min(max(int(arguments.get("timeout_seconds", 120)), 1), 1800)
             if self.settings.benchmark_mode:
                 timeout = min(timeout, max(1, int(self.settings.benchmark_shell_timeout)))
+            filesystem, network = shell_sandbox_policy(self.settings)
             result = await self.sandbox.run(
                 argv[0],
                 argv[1:],
                 timeout=float(timeout),
-                filesystem=self.settings.shell_filesystem,
-                network=self.settings.shell_network,
+                filesystem=filesystem,
+                network=network,
             )
             output = result.stdout + (f"\n[stderr]\n{result.stderr}" if result.stderr else "")
             output_limit = (

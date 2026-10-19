@@ -11,7 +11,14 @@ from .definitions import (
 from .errors import ToolArgumentError, ToolDenied, ToolError, ToolNotVisibleYet
 from .executor import ApprovalGate, ToolExecutor
 from .projection import ToolProjection
-from .shell import ShellInvocation, ShellRuntime, build_shell_invocation, describe_shell, shell_command_argv
+from .shell import (
+    ShellInvocation,
+    ShellRuntime,
+    build_shell_invocation,
+    describe_shell,
+    shell_command_argv,
+    shell_sandbox_policy,
+)
 
 __all__ = [
     "ApprovalGate",
@@ -32,4 +39,5 @@ __all__ = [
     "build_shell_invocation",
     "describe_shell",
     "shell_command_argv",
+    "shell_sandbox_policy",
 ]

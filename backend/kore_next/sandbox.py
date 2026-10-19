@@ -22,6 +22,25 @@ class ProcessResult:
     stderr: str
 
 
+def _decode_output(raw: bytes) -> str:
+    """Decode UTF-8 output, including UTF-16 diagnostics from Windows tools."""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16", errors="replace")
+    if len(raw) >= 4 and raw[1::2].count(0) >= len(raw) // 4:
+        return raw.decode("utf-16-le", errors="replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        if len(raw) % 2 == 0:
+            try:
+                decoded = raw.decode("utf-16-le")
+                if "\x00" not in decoded:
+                    return decoded
+            except UnicodeDecodeError:
+                pass
+        return raw.decode("utf-8", errors="replace")
+
+
 @dataclass(frozen=True)
 class ProcessLaunch:
     command: list[str]
@@ -177,8 +196,8 @@ class SandboxSupervisor:
                 launch.profile_path.unlink(missing_ok=True)
         return ProcessResult(
             process.returncode,
-            stdout.decode("utf-8", errors="replace"),
-            stderr.decode("utf-8", errors="replace"),
+            _decode_output(stdout),
+            _decode_output(stderr),
         )
 
     async def _terminate_process_tree(self, process: asyncio.subprocess.Process) -> None:

@@ -102,6 +102,15 @@ KORENEXT_SHELL_NETWORK=allowed
 
 `auto` 会优先选择 PowerShell 7（`pwsh`），其次 Windows PowerShell（`powershell.exe`），最后 `cmd.exe`。宿主模式没有文件系统隔离，仍会逐次要求人工审批，不要用它运行不可信命令。需要隔离时使用 `KORENEXT_SHELL_BACKEND=docker` 并配置容器。
 
+也可以使用 WSL2 作为隔离后端：
+
+```dotenv
+KORENEXT_SHELL_BACKEND=wsl
+KORENEXT_SHELL_WSL_DISTRO=Ubuntu-22.04
+```
+
+WSL 后端会把当前工作区路径交给 WSL 自动映射为 `/mnt/<drive>/...`，命令在 Linux 发行版内执行。Docker/WSL 的网络隔离由各自的容器或发行版配置负责。
+
 每次 Shell 调用都是独立进程，不保留 `cd` 状态，也不支持交互式 stdin。
 
 ## 网络与数据

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from dataclasses import replace
 
@@ -9,9 +10,29 @@ import pytest
 import kore_next.sandbox as sandbox_module
 from kore_next.config import Settings
 from kore_next.sandbox import SandboxError, SandboxSupervisor
-from kore_next.tools.shell import build_shell_invocation, describe_shell, shell_command_argv
+from kore_next.tools.shell import (
+    build_shell_invocation,
+    describe_shell,
+    shell_command_argv,
+    shell_sandbox_policy,
+)
 
 WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="Windows shell integration test")
+
+
+def _wsl_ready() -> bool:
+    if sys.platform != "win32" or shutil.which("wsl") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["wsl", "--list", "--quiet"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def settings(**overrides):
@@ -66,6 +87,26 @@ def test_docker_runtime_is_workspace_isolated():
     assert runtime.interpreter == "bash"
     assert runtime.workspace_sandbox == "docker"
     assert runtime.host_enabled is True
+
+
+def test_wsl_runtime_reports_workspace_isolation():
+    runtime = describe_shell(
+        settings(shell_backend="wsl"),
+        platform="win32",
+        which=lambda name: r"C:\Windows\System32\wsl.exe" if name == "wsl" else None,
+    )
+
+    assert runtime.backend == "wsl"
+    assert runtime.interpreter == "bash"
+    assert runtime.workspace_sandbox == "wsl"
+    assert runtime.host_enabled is True
+
+
+def test_wsl_runtime_reports_missing_wsl():
+    runtime = describe_shell(settings(shell_backend="wsl"), platform="win32", which=lambda _: None)
+
+    assert runtime.host_available is False
+    assert runtime.reason == "WSL is not available"
 
 
 def test_macos_runtime_keeps_seatbelt_sandbox():
@@ -145,6 +186,47 @@ def test_posix_local_shell_keeps_existing_direct_argv_behavior():
     assert invocation.backend == "posix-host"
     assert invocation.interpreter == "direct"
     assert invocation.argv == ["git", "status"]
+
+
+def test_wsl_invocation_uses_optional_distro_and_bash():
+    wsl = r"C:\Windows\System32\wsl.exe"
+    invocation = build_shell_invocation(
+        settings(shell_backend="wsl", shell_wsl_distro="Ubuntu-22.04"),
+        "pwd",
+        platform="win32",
+        os_name="nt",
+        which=lambda name: wsl if name == "wsl" else None,
+    )
+
+    assert invocation.backend == "wsl"
+    assert invocation.argv == [wsl, "-d", "Ubuntu-22.04", "--", "bash", "-lc", "pwd"]
+
+
+def test_wsl_backend_is_windows_only():
+    with pytest.raises(ValueError, match="only available on Windows"):
+        build_shell_invocation(
+            settings(shell_backend="wsl"),
+            "pwd",
+            platform="linux",
+            os_name="posix",
+            which=lambda _: "/usr/bin/wsl",
+        )
+
+
+def test_isolated_backends_use_host_process_with_their_own_sandbox():
+    wsl = r"C:\Windows\System32\wsl.exe"
+
+    assert shell_sandbox_policy(settings(shell_backend="docker"), platform="win32") == ("host", "allowed")
+    assert shell_sandbox_policy(
+        settings(shell_backend="wsl"),
+        platform="win32",
+        which=lambda name: wsl if name == "wsl" else None,
+    ) == ("host", "allowed")
+    assert shell_sandbox_policy(settings(), platform="win32") == ("workspace", "allowed")
+
+
+def test_decode_output_handles_utf16_windows_diagnostics():
+    assert sandbox_module._decode_output("错误".encode("utf-16-le")) == "错误"
 
 
 def test_clean_environment_keeps_windows_tooling_paths(tmp_path, monkeypatch):
@@ -257,3 +339,25 @@ async def test_windows_shell_timeout_terminates_the_process(tmp_path):
             network="allowed",
             timeout=0.5,
         )
+
+
+@WINDOWS_ONLY
+@pytest.mark.skipif(not _wsl_ready(), reason="WSL is not available")
+async def test_wsl_backend_runs_in_linux(tmp_path):
+    invocation = build_shell_invocation(
+        settings(shell_backend="wsl"),
+        "printf 'wsl-ok\\n'",
+        platform="win32",
+        os_name="nt",
+    )
+
+    result = await SandboxSupervisor(tmp_path).run(
+        invocation.argv[0],
+        invocation.argv[1:],
+        filesystem="host",
+        network="allowed",
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "wsl-ok" in result.stdout

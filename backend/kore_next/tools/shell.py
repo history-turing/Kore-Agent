@@ -79,6 +79,16 @@ def describe_shell(
             host_enabled=True,
             workspace_sandbox="docker",
         )
+    if settings.shell_backend == "wsl":
+        executable = which("wsl")
+        return ShellRuntime(
+            backend="wsl",
+            interpreter="bash",
+            host_available=executable is not None,
+            host_enabled=executable is not None,
+            workspace_sandbox="wsl" if executable else "unavailable",
+            reason=None if executable else "WSL is not available",
+        )
     if settings.shell_backend != "local":
         return ShellRuntime(
             backend=settings.shell_backend,
@@ -116,6 +126,19 @@ def describe_shell(
     )
 
 
+def shell_sandbox_policy(
+    settings: Settings,
+    *,
+    platform: str | None = None,
+    which: Callable[[str], str | None] | None = None,
+) -> tuple[str, str]:
+    """Return the outer process policy for a backend that owns its own isolation."""
+    runtime = describe_shell(settings, platform=platform, which=which)
+    if runtime.workspace_sandbox in {"docker", "wsl"}:
+        return "host", "allowed"
+    return settings.shell_filesystem, settings.shell_network
+
+
 def _windows_argv(interpreter: str, executable: str, command: str) -> list[str]:
     if interpreter == "cmd":
         return [executable, "/d", "/s", "/c", CMD_UTF8_PREFIX + command]
@@ -151,6 +174,19 @@ def build_shell_invocation(
         return ShellInvocation(
             [*docker, "exec", "-w", "/testbed", container, "bash", "-lc", script],
             "docker",
+            "bash",
+        )
+    if settings.shell_backend == "wsl":
+        if platform != "win32":
+            raise ValueError("The WSL shell backend is only available on Windows")
+        executable = which("wsl")
+        if not executable:
+            raise ValueError("WSL is not available on this host")
+        distro = settings.shell_wsl_distro.strip()
+        distro_args = ["-d", distro] if distro else []
+        return ShellInvocation(
+            [executable, *distro_args, "--", "bash", "-lc", command],
+            "wsl",
             "bash",
         )
     if settings.shell_backend != "local":
