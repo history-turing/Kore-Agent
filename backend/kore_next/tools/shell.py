@@ -3,6 +3,10 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from ..config import Settings
 
@@ -11,6 +15,93 @@ CONTAINER_BOOTSTRAP = (
     "source /opt/miniconda3/bin/activate; "
     "conda activate testbed 2>/dev/null || true; fi"
 )
+
+
+@dataclass(frozen=True)
+class ShellRuntime:
+    backend: str
+    interpreter: str | None
+    host_available: bool
+    host_enabled: bool
+    workspace_sandbox: str
+    reason: str | None = None
+
+
+def _resolve_windows_interpreter(
+    requested: str,
+    *,
+    which: Callable[[str], str | None],
+) -> tuple[str, str]:
+    """Resolve a Windows shell without importing platform code into the caller."""
+    name = requested.strip().lower() or "auto"
+    if name not in {"auto", "pwsh", "powershell", "cmd"}:
+        raise ValueError(f"Unsupported Windows shell interpreter: {requested}")
+    if name == "auto":
+        for candidate in ("pwsh", "powershell"):
+            path = which(candidate)
+            if path:
+                return candidate, path
+        return "cmd", os.environ.get("COMSPEC", "cmd.exe")
+    if name == "cmd":
+        return "cmd", os.environ.get("COMSPEC", "cmd.exe")
+    path = which(name)
+    if not path:
+        raise ValueError(f"Windows shell interpreter is not available: {name}")
+    return name, path
+
+
+def describe_shell(
+    settings: Settings,
+    *,
+    platform: str | None = None,
+    which: Callable[[str], str | None] | None = None,
+) -> ShellRuntime:
+    """Describe the configured shell without starting a process."""
+    platform = sys.platform if platform is None else platform
+    which = shutil.which if which is None else which
+    if settings.shell_backend == "docker":
+        return ShellRuntime(
+            backend="docker",
+            interpreter="bash",
+            host_available=True,
+            host_enabled=True,
+            workspace_sandbox="docker",
+        )
+    if settings.shell_backend != "local":
+        return ShellRuntime(
+            backend=settings.shell_backend,
+            interpreter=None,
+            host_available=False,
+            host_enabled=False,
+            workspace_sandbox="unavailable",
+            reason=f"Unsupported shell backend: {settings.shell_backend}",
+        )
+    if platform == "win32":
+        try:
+            interpreter, _ = _resolve_windows_interpreter(settings.shell_interpreter, which=which)
+        except ValueError as exc:
+            return ShellRuntime(
+                backend="windows-host",
+                interpreter=None,
+                host_available=False,
+                host_enabled=False,
+                workspace_sandbox="unavailable",
+                reason=str(exc),
+            )
+        return ShellRuntime(
+            backend="windows-host",
+            interpreter=interpreter,
+            host_available=True,
+            host_enabled=settings.shell_filesystem == "host" and settings.shell_network == "allowed",
+            workspace_sandbox="unavailable",
+        )
+    return ShellRuntime(
+        backend="posix-host",
+        interpreter="direct",
+        host_available=True,
+        host_enabled=settings.shell_filesystem == "host" and settings.shell_network == "allowed",
+        workspace_sandbox="macos-seatbelt" if platform == "darwin" else "unavailable",
+    )
 
 
 def shell_command_argv(settings: Settings, command: str) -> list[str]:

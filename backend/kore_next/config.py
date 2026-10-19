@@ -39,6 +39,7 @@ class Settings:
     shell_backend: str = os.getenv("KORENEXT_SHELL_BACKEND", "local")
     shell_container: str = os.getenv("KORENEXT_SHELL_CONTAINER", "")
     docker_command: str = os.getenv("KORENEXT_DOCKER_COMMAND", "docker")
+    shell_interpreter: str = os.getenv("KORENEXT_SHELL_INTERPRETER", "auto")
     shell_filesystem: str = os.getenv("KORENEXT_SHELL_FILESYSTEM", "workspace")
     shell_network: str = os.getenv("KORENEXT_SHELL_NETWORK", "allowed")
     shell_bootstrap: str = os.getenv("KORENEXT_SHELL_BOOTSTRAP", "")

@@ -12,6 +12,7 @@ function PreferencesView() {
     queryFn: () => rpc.call<any>('model_settings.get'),
   })
   const extensions = useQuery({ queryKey: ['extensions'], queryFn: () => rpc.call<any>('extension.list') })
+  const capabilities = info.data?.execution_capabilities
   const [provider, setProvider] = useState('openai')
   const current = useMemo(
     () => settings.data?.providers?.find((p: any) => p.provider === provider),
@@ -90,9 +91,15 @@ function PreferencesView() {
               <dd>{info.data?.rpc_methods?.length || 0}</dd>
               <dt>工作区沙箱</dt>
               <dd>
-                {info.data?.execution_capabilities?.workspace_sandbox === 'unavailable'
-                  ? '不可用：Shell 与默认 MCP 将拒绝启动'
-                  : info.data?.execution_capabilities?.workspace_sandbox || '未知'}
+                {capabilities?.workspace_sandbox === 'unavailable'
+                  ? '不可用：Shell 需显式启用 host，或使用 Docker'
+                  : capabilities?.workspace_sandbox || '未知'}
+              </dd>
+              <dt>Shell 后端</dt>
+              <dd>
+                {capabilities?.shell_backend || '未知'}
+                {capabilities?.shell_interpreter ? ` · ${capabilities.shell_interpreter}` : ''}
+                {capabilities?.shell_host_enabled ? ' · host 已启用' : ''}
               </dd>
             </dl>
             {info.data?.legacy_permission_rules_needing_review > 0 && (

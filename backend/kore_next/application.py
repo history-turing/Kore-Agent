@@ -38,6 +38,7 @@ from .services.skills import SkillService
 from .services.tool_router import ServiceToolRouter
 from .skill_learning import SkillLearningService
 from .tasks import TaskService
+from .tools.shell import describe_shell
 from .workspace import WorkspaceContext, WorkspaceError, resolve_workspace
 
 Broadcaster = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -337,6 +338,7 @@ class Application:
         offloads = await self.db.fetchone(
             "SELECT COUNT(*) AS n, COALESCE(SUM(size_bytes),0) AS bytes FROM context_offloads"
         )
+        shell = describe_shell(self.settings)
         return {
             "name": "KoreAgent Next",
             "version": "0.1.0",
@@ -353,8 +355,13 @@ class Application:
                 "offloaded_bytes": offloads["bytes"] if offloads else 0,
             },
             "execution_capabilities": {
-                "workspace_sandbox": "macos-seatbelt" if sys.platform == "darwin" else "unavailable",
-                "shell_workspace": sys.platform == "darwin",
+                "workspace_sandbox": shell.workspace_sandbox,
+                "shell_workspace": shell.workspace_sandbox != "unavailable",
+                "shell_host": shell.host_available,
+                "shell_host_enabled": shell.host_enabled,
+                "shell_backend": shell.backend,
+                "shell_interpreter": shell.interpreter,
+                "shell_reason": shell.reason,
                 "mcp_workspace": sys.platform == "darwin",
                 "host_process": True,
             },

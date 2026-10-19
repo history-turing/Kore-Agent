@@ -11,7 +11,7 @@ from .definitions import (
 from .errors import ToolArgumentError, ToolDenied, ToolError, ToolNotVisibleYet
 from .executor import ApprovalGate, ToolExecutor
 from .projection import ToolProjection
-from .shell import shell_command_argv
+from .shell import ShellRuntime, describe_shell, shell_command_argv
 
 __all__ = [
     "ApprovalGate",
@@ -26,6 +26,8 @@ __all__ = [
     "ToolExecutor",
     "ToolNotVisibleYet",
     "ToolProjection",
+    "ShellRuntime",
     "builtin_tool_definitions",
+    "describe_shell",
     "shell_command_argv",
 ]

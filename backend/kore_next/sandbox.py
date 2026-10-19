@@ -99,6 +99,12 @@ class SandboxSupervisor:
         if filesystem != "host" or network != "allowed":
             # Never silently run an isolation request on an unsupported host.
             if sys.platform != "darwin":
+                if sys.platform == "win32":
+                    raise SandboxError(
+                        "Workspace sandbox is unavailable on Windows; set "
+                        "KORENEXT_SHELL_FILESYSTEM=host for approved host commands, "
+                        "or use KORENEXT_SHELL_BACKEND=docker for isolation"
+                    )
                 raise SandboxError("Workspace sandbox is unavailable on this platform; process was not started")
             sandbox_exec = shutil.which("sandbox-exec") or "/usr/bin/sandbox-exec"
             if not Path(sandbox_exec).is_file():
