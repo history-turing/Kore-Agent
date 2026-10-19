@@ -89,6 +89,21 @@ swift test
 
 Computer Helper 当前仅在 macOS 上可用。Windows 没有可靠工作区沙箱时，Shell 和默认 MCP 配置会拒绝启动；如确需运行 MCP，须明确将文件系统设为 `host`、网络设为 `allowed`，每次工具调用仍需审批。宿主机模式不提供隔离，切勿运行不可信 Server。
 
+## Windows Shell
+
+默认的 `KORENEXT_SHELL_FILESYSTEM=workspace` 需要 macOS Seatbelt，因此 Windows 会安全拒绝启动 Shell。要在 Windows 上使用宿主 PowerShell 或 cmd，需要显式启用：
+
+```dotenv
+KORENEXT_SHELL_BACKEND=local
+KORENEXT_SHELL_INTERPRETER=auto
+KORENEXT_SHELL_FILESYSTEM=host
+KORENEXT_SHELL_NETWORK=allowed
+```
+
+`auto` 会优先选择 PowerShell 7（`pwsh`），其次 Windows PowerShell（`powershell.exe`），最后 `cmd.exe`。宿主模式没有文件系统隔离，仍会逐次要求人工审批，不要用它运行不可信命令。需要隔离时使用 `KORENEXT_SHELL_BACKEND=docker` 并配置容器。
+
+每次 Shell 调用都是独立进程，不保留 `cd` 状态，也不支持交互式 stdin。
+
 ## 网络与数据
 
 搜索默认使用 DuckDuckGo；设置 `KORENEXT_TAVILY_API_KEY` 后，`KORENEXT_SEARCH_PROVIDER=auto` 会优先使用 Tavily，遇到可恢复错误时回退。HTTP 工具默认拒绝私网地址及重定向到私网的目标，只有明确设置 `KORENEXT_HTTP_ALLOW_PRIVATE_NETWORK=true` 才放行。

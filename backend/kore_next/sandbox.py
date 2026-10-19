@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -39,6 +40,24 @@ class SandboxSupervisor:
         "COMSPEC",
         "TEMP",
         "TMP",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "COMMONPROGRAMFILES",
+        "COMMONPROGRAMFILES(X86)",
+        "SYSTEMDRIVE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PSMODULEPATH",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+        "USERNAME",
+        "USERDOMAIN",
+        "LOGONSERVER",
+        "SESSIONNAME",
         "LANG",
         "LC_ALL",
         "TERM",
@@ -134,6 +153,9 @@ class SandboxSupervisor:
             network=network,
         )
 
+        launch_options: dict[str, Any] = (
+            {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {"start_new_session": True}
+        )
         process: asyncio.subprocess.Process | None = None
         try:
             process = await asyncio.create_subprocess_exec(
@@ -143,12 +165,12 @@ class SandboxSupervisor:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **launch_options,
             )
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except TimeoutError as exc:
-            if process and process.returncode is None:
-                process.kill()
-                await process.wait()
+            if process:
+                await self._terminate_process_tree(process)
             raise SandboxError(f"Process timed out after {timeout:g}s") from exc
         finally:
             if launch.profile_path:
@@ -158,6 +180,38 @@ class SandboxSupervisor:
             stdout.decode("utf-8", errors="replace"),
             stderr.decode("utf-8", errors="replace"),
         )
+
+    async def _terminate_process_tree(self, process: asyncio.subprocess.Process) -> None:
+        """Stop the whole command tree, including shells that spawned children."""
+        if process.returncode is not None:
+            return
+        if sys.platform == "win32":
+            try:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/F",
+                    "/T",
+                    "/PID",
+                    str(process.pid),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                await asyncio.wait_for(killer.wait(), 5)
+            except (OSError, TimeoutError):
+                pass
+        else:
+            import signal
+
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
 
     def _seatbelt_profile(self, *, filesystem: str, network: str) -> Path:
         workspace = str(self.workspace).replace('"', '\\"')

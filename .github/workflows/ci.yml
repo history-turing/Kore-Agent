@@ -30,6 +30,19 @@ jobs:
         working-directory: desktop
       - run: npm run build
         working-directory: desktop
+  backend-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r backend/requirements-dev.txt
+      - run: python -m pytest tests/test_shell_windows.py -q
+        working-directory: backend
+      - run: python -m ruff check kore_next tests
+        working-directory: backend
+      - run: python -m compileall -q kore_next
+        working-directory: backend
   native:
     runs-on: macos-latest
     steps:
