@@ -9,7 +9,9 @@ import pytest
 
 import kore_next.sandbox as sandbox_module
 from kore_next.config import Settings
+from kore_next.mcp import McpManager
 from kore_next.sandbox import SandboxError, SandboxSupervisor
+from kore_next.tools import ToolExecutor
 from kore_next.tools.shell import (
     build_shell_invocation,
     describe_shell,
@@ -37,6 +39,15 @@ def _wsl_ready() -> bool:
 
 def settings(**overrides):
     return replace(Settings(), **overrides)
+
+
+class NoComputer:
+    @staticmethod
+    def tool_definitions():
+        return []
+
+    async def tool(self, *_args, **_kwargs):
+        raise AssertionError("computer tool should not be called")
 
 
 def test_windows_runtime_prefers_pwsh_without_changing_default_policy():
@@ -339,6 +350,43 @@ async def test_windows_shell_timeout_terminates_the_process(tmp_path):
             network="allowed",
             timeout=0.5,
         )
+
+
+@WINDOWS_ONLY
+async def test_windows_shell_tool_executes_through_executor(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    approvals = []
+
+    async def approve(_run_id, _call_id, arguments, reason):
+        approvals.append((arguments, reason))
+        return True
+
+    executor = ToolExecutor(
+        Settings(
+            data_dir=tmp_path / "data",
+            workspace_dir=workspace,
+            shell_backend="local",
+            shell_filesystem="host",
+        ),
+        approve,
+        None,
+        None,
+        McpManager(tmp_path),
+        NoComputer(),  # type: ignore[arg-type]
+    )
+
+    result = await executor.execute(
+        "run",
+        "shell",
+        {"command": "Write-Output 'tool-ok'"},
+        "call",
+        mode="normal",
+    )
+
+    assert "exit_code=0" in result
+    assert "tool-ok" in result
+    assert approvals and approvals[0][1] == "执行本地命令"
 
 
 @WINDOWS_ONLY
