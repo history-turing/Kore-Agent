@@ -124,11 +124,20 @@ $HostProcess = Start-Process -FilePath $Python `
   -WindowStyle Hidden `
   -PassThru
 
+$PreviousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
+if ($null -ne $PreviousElectronRunAsNode) {
+  Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  Write-Host '[KoreAgent Next] Ignoring inherited ELECTRON_RUN_AS_NODE for the desktop app.'
+}
+
 try {
   Invoke-CheckedCommand -FilePath $NpmCommand.Source `
     -Arguments @('--prefix', $Desktop, 'run', 'electron:dev') `
     -FailureMessage 'The desktop application exited with an error.'
 } finally {
+  if ($null -ne $PreviousElectronRunAsNode) {
+    $env:ELECTRON_RUN_AS_NODE = $PreviousElectronRunAsNode
+  }
   if (-not $HostProcess.HasExited) {
     Stop-Process -Id $HostProcess.Id -ErrorAction SilentlyContinue
   }
