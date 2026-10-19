@@ -16,9 +16,9 @@ export function ApprovalControls({
   onMatchChange(match: PermissionMatch): void
   disabled?: boolean
 }) {
-  const matches: PermissionMatch[] = approval.available_matches?.length
-    ? approval.available_matches
-    : ['arguments']
+  const defaultMatches: PermissionMatch[] =
+    approval.tool_name === 'shell' ? ['arguments', 'command', 'tool'] : ['arguments', 'tool']
+  const matches = approval.available_matches?.length ? approval.available_matches : defaultMatches
   const activeMatch = matches.includes(match) ? match : 'arguments'
 
   const changeScope = (next: PermissionScope) => {

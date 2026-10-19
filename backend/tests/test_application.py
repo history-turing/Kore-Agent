@@ -663,6 +663,24 @@ async def test_approval_can_persist_command_match_without_timeout(app):
     assert verdict.effect == "allow"
 
 
+async def test_orphaned_pending_approvals_are_cancelled_on_startup(app):
+    stamp = now()
+    await app.db.execute(
+        "INSERT INTO approvals VALUES(?,?,?,?)",
+        (
+            "orphaned-approval",
+            dumps({"id": "orphaned-approval", "status": "pending", "tool_name": "shell"}),
+            "pending",
+            stamp,
+        ),
+    )
+
+    assert await app.approvals.cancel_pending() == 1
+    row = await app.db.fetchone("SELECT status,data_json FROM approvals WHERE id=?", ("orphaned-approval",))
+    assert row["status"] == "cancelled"
+    assert '"status":"cancelled"' in row["data_json"]
+
+
 async def test_skill_and_mcp_management(app):
     skill = (
         await app.skill_install(

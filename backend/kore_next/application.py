@@ -233,6 +233,7 @@ class Application:
     async def start(self) -> None:
         await self.db.initialize()
         await self.runs.recover_stale_runs()
+        await self.approvals.cancel_pending()
         await self.evidence.backfill_from_runtime_events(limit=2_000)
         await self.skill_service.migrate_user_skills()
         await self.skill_learning.scan_completed_runs(existing_skills=await self.skill_service.skills(), limit=100)

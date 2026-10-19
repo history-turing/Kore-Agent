@@ -116,6 +116,18 @@ class ApprovalService:
         )
         await self._broadcast()("approval.resolved", approval)
 
+    async def cancel_pending(self) -> int:
+        """Cancel approvals whose in-memory waiters did not survive a restart."""
+        rows = await self.db.fetchall("SELECT id,data_json FROM approvals WHERE status='pending'")
+        for row in rows:
+            approval = loads(row["data_json"], {})
+            approval.update(status="cancelled", resolved_at=now())
+            await self.db.execute(
+                "UPDATE approvals SET data_json=?,status=? WHERE id=?",
+                (dumps(approval), "cancelled", row["id"]),
+            )
+        return len(rows)
+
     async def list(self, params: dict[str, Any]) -> dict[str, Any]:
         status = params.get("status")
         if status:
